@@ -27,3 +27,10 @@
 *.i*86
 *.x86_64
 *.hex
+raspimjpg
+
+# cmake
+CMakeCache.txt
+CMakeFiles
+Makefile
+cmake_install.cmake
