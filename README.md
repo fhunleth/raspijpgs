@@ -6,3 +6,13 @@ See
 https://github.com/silvanmelchior/userland/tree/master/host_applications/linux/apps/raspicam
 for raspimjpeg and raspistill which are programs that I wish that I could have
 used. This one is based on raspimjpeg.
+
+## Installation
+
+If you're using Raspian, run the following:
+
+    sudo apt-get install cmake
+    cmake .
+    make
+    sudo make install
+
