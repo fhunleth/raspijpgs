@@ -224,7 +224,7 @@ static void rational_param_apply(int mmal_param, const struct raspi_config_opt *
             return;
     }
     MMAL_RATIONAL_T mmal_value = {value, 100};
-    MMAL_STATUS_T status = mmal_port_parameter_set_rational(camera->control, mmal_param, mmal_value);
+    MMAL_STATUS_T status = mmal_port_parameter_set_rational(state.camera->control, mmal_param, mmal_value);
     if(status != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
 }
@@ -250,7 +250,7 @@ static void ISO_apply(const struct raspi_config_opt *opt, enum config_context co
 {
     UNUSED(context);
     unsigned int value = strtoul(getenv(opt->env_key), 0, 0);
-    MMAL_STATUS_T status = mmal_port_parameter_set_uint32(camera->control, MMAL_PARAMETER_ISO, value);
+    MMAL_STATUS_T status = mmal_port_parameter_set_uint32(state.camera->control, MMAL_PARAMETER_ISO, value);
     if(status != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
 }
@@ -258,7 +258,7 @@ static void vstab_apply(const struct raspi_config_opt *opt, enum config_context 
 {
     UNUSED(context);
     unsigned int value = (strcmp(getenv(opt->env_key), "on") == 0);
-    MMAL_STATUS_T status = mmal_port_parameter_set_uint32(camera->control, MMAL_PARAMETER_VIDEO_STABILISATION, value);
+    MMAL_STATUS_T status = mmal_port_parameter_set_uint32(state.camera->control, MMAL_PARAMETER_VIDEO_STABILISATION, value);
     if(status != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
 }
@@ -290,7 +290,7 @@ static void exposure_apply(const struct raspi_config_opt *opt, enum config_conte
     }
 
     MMAL_PARAMETER_EXPOSUREMODE_T exp_mode = {{MMAL_PARAMETER_EXPOSURE_MODE,sizeof(exp_mode)}, mode};
-    if (mmal_port_parameter_set(camera->control, &exp_mode.hdr) != MMAL_SUCCESS)
+    if (mmal_port_parameter_set(state.camera->control, &exp_mode.hdr) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
 }
 static void awb_apply(const struct raspi_config_opt *opt, enum config_context context)
@@ -669,7 +669,7 @@ static void jpegencoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T 
     if (port->is_enabled) {
         MMAL_BUFFER_HEADER_T *new_buffer;
 
-        if (!(new_buffer = mmal_queue_get(pool_jpegencoder->queue)) ||
+        if (!(new_buffer = mmal_queue_get(state.pool_jpegencoder->queue)) ||
              mmal_port_send_buffer(port, new_buffer) != MMAL_SUCCESS)
             errx(EXIT_FAILURE, "Could not send buffers to port");
     }
@@ -677,21 +677,20 @@ static void jpegencoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T 
 
 void start_all()
 {
-    MMAL_ES_FORMAT_T *format;
-    int max, i;
-
     //
     // create camera
     //
-    if (mmal_component_create(MMAL_COMPONENT_DEFAULT_CAMERA, &camera) != MMAL_SUCCESS)
+    if (mmal_component_create(MMAL_COMPONENT_DEFAULT_CAMERA, &state.camera) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not create camera");
-    if (mmal_port_enable(camera->control, camera_control_callback) != MMAL_SUCCESS)
+    if (mmal_port_enable(state.camera->control, camera_control_callback) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not enable camera control port");
 
+    int video_width = 1920;
+    int video_height = 1080;
     MMAL_PARAMETER_CAMERA_CONFIG_T cam_config = {
         {MMAL_PARAMETER_CAMERA_CONFIG, sizeof(cam_config)},
-        .max_stills_w = image_width,
-        .max_stills_h = image_height,
+        .max_stills_w = 2592, //image_width,
+        .max_stills_h = 1944, //image_height,
         .stills_yuv422 = 0,
         .one_shot_stills = 1,
         .max_preview_video_w = video_width,
@@ -701,9 +700,9 @@ void start_all()
         .fast_preview_resume = 0,
         .use_stc_timestamp = MMAL_PARAM_TIMESTAMP_MODE_RESET_STC
     };
-    mmal_port_parameter_set(camera->control, &cam_config.hdr);
+    mmal_port_parameter_set(state.camera->control, &cam_config.hdr);
 
-    format = camera->output[0]->format;
+    MMAL_ES_FORMAT_T *format = state.camera->output[0]->format;
     format->es->video.width = video_width;
     format->es->video.height = video_height;
     format->es->video.crop.x = 0;
@@ -712,36 +711,36 @@ void start_all()
     format->es->video.crop.height = video_height;
     format->es->video.frame_rate.num = 0;
     format->es->video.frame_rate.den = 1;
-    if (mmal_port_format_commit(camera->output[0]) != MMAL_SUCCESS)
+    if (mmal_port_format_commit(state.camera->output[0]) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Coult not set preview format");
 
-    if (mmal_component_enable(camera) != MMAL_SUCCESS)
+    if (mmal_component_enable(state.camera) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not enable camera");
 
     //
     // create jpeg-encoder
     //
-    status = mmal_component_create(MMAL_COMPONENT_DEFAULT_IMAGE_ENCODER, &jpegencoder);
+    status = mmal_component_create(MMAL_COMPONENT_DEFAULT_IMAGE_ENCODER, &state.jpegencoder);
     if (status != MMAL_SUCCESS && status != MMAL_ENOSYS)
         errx(EXIT_FAILURE, "Could not create image encoder");
 
-    mmal_format_copy(jpegencoder->output[0]->format, jpegencoder->input[0]->format);
-    jpegencoder->output[0]->format->encoding = MMAL_ENCODING_JPEG;
-    jpegencoder->output[0]->buffer_size = jpegencoder->output[0]->buffer_size_recommended;
-    if(jpegencoder->output[0]->buffer_size < jpegencoder->output[0]->buffer_size_min)
-        jpegencoder->output[0]->buffer_size = jpegencoder->output[0]->buffer_size_min;
-    jpegencoder->output[0]->buffer_num = jpegencoder->output[0]->buffer_num_recommended;
-    if(jpegencoder->output[0]->buffer_num < jpegencoder->output[0]->buffer_num_min)
-        jpegencoder->output[0]->buffer_num = jpegencoder->output[0]->buffer_num_min;
-    if (mmal_port_format_commit(jpegencoder->output[0]) != MMAL_SUCCESS)
+    mmal_format_copy(state.jpegencoder->output[0]->format, state.jpegencoder->input[0]->format); // WHAT???
+    state.jpegencoder->output[0]->format->encoding = MMAL_ENCODING_JPEG;
+    state.jpegencoder->output[0]->buffer_size = state.jpegencoder->output[0]->buffer_size_recommended;
+    if (state.jpegencoder->output[0]->buffer_size < state.jpegencoder->output[0]->buffer_size_min)
+        state.jpegencoder->output[0]->buffer_size = state.jpegencoder->output[0]->buffer_size_min;
+    state.jpegencoder->output[0]->buffer_num = state.jpegencoder->output[0]->buffer_num_recommended;
+    if(state.jpegencoder->output[0]->buffer_num < state.jpegencoder->output[0]->buffer_num_min)
+        state.jpegencoder->output[0]->buffer_num = state.jpegencoder->output[0]->buffer_num_min;
+    if (mmal_port_format_commit(state.jpegencoder->output[0]) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set image format");
-    if (mmal_port_parameter_set_uint32(jpegencoder->output[0], MMAL_PARAMETER_JPEG_Q_FACTOR, quality) != MMAL_SUCCESS)
+    if (mmal_port_parameter_set_uint32(state.jpegencoder->output[0], MMAL_PARAMETER_JPEG_Q_FACTOR, quality) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set jpeg quality");
 
-    if (mmal_component_enable(jpegencoder) != MMAL_SUCCESS)
+    if (mmal_component_enable(state.jpegencoder) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not enable image encoder");
-    pool_jpegencoder = mmal_port_pool_create(jpegencoder->output[0], jpegencoder->output[0]->buffer_num, jpegencoder->output[0]->buffer_size);
-    if (!pool_jpegencoder)
+    state.pool_jpegencoder = mmal_port_pool_create(state.jpegencoder->output[0], state.jpegencoder->output[0]->buffer_num, state.jpegencoder->output[0]->buffer_size);
+    if (!state.pool_jpegencoder)
         errx(EXIT_FAILURE, "Could not create image buffer pool");
 
     //
@@ -749,11 +748,11 @@ void start_all()
     //
     unsigned int height_temp = (unsigned long int)width*video_height/video_width;
     height_temp -= height_temp%16;
-    status = mmal_component_create("vc.ril.resize", &resizer);
+    status = mmal_component_create("vc.ril.resize", &state.resizer);
     if (status != MMAL_SUCCESS && status != MMAL_ENOSYS)
         errx(EXIT_FAILURE, "Could not create image resizer");
 
-    format = resizer->output[0]->format;
+    format = state.resizer->output[0]->format;
     format->es->video.width = width;
     format->es->video.height = height_temp;
     format->es->video.crop.x = 0;
@@ -762,33 +761,34 @@ void start_all()
     format->es->video.crop.height = height_temp;
     format->es->video.frame_rate.num = 30;
     format->es->video.frame_rate.den = 1;
-    if (mmal_port_format_commit(resizer->output[0]) != MMAL_SUCCESS)
+    if (mmal_port_format_commit(state.resizer->output[0]) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set image resizer output");
 
-    if (mmal_component_enable(resizer) != MMAL_SUCCESS)
+    if (mmal_component_enable(state.resizer) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not enable image resizer");
 
     //
     // connect
     //
-    if (mmal_connection_create(&con_cam_res, camera->output[0], resizer->input[0], MMAL_CONNECTION_FLAG_TUNNELLING | MMAL_CONNECTION_FLAG_ALLOCATION_ON_INPUT) != MMAL_SUCCESS)
+    if (mmal_connection_create(&state.con_cam_res, state.camera->output[0], state.resizer->input[0], MMAL_CONNECTION_FLAG_TUNNELLING | MMAL_CONNECTION_FLAG_ALLOCATION_ON_INPUT) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not create connection camera -> resizer");
-    if (mmal_connection_enable(con_cam_res) != MMAL_SUCCESS)
+    if (mmal_connection_enable(state.con_cam_res) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not enable connection camera -> resizer");
 
-    if (mmal_connection_create(&con_res_jpeg, resizer->output[0], jpegencoder->input[0], MMAL_CONNECTION_FLAG_TUNNELLING | MMAL_CONNECTION_FLAG_ALLOCATION_ON_INPUT) != MMAL_SUCCESS)
+    if (mmal_connection_create(&state.con_res_jpeg, state.resizer->output[0], state.jpegencoder->input[0], MMAL_CONNECTION_FLAG_TUNNELLING | MMAL_CONNECTION_FLAG_ALLOCATION_ON_INPUT) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not create connection resizer -> encoder");
-    if (mmal_connection_enable(con_res_jpeg) != MMAL_SUCCESS)
+    if (mmal_connection_enable(state.con_res_jpeg) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not enable connection resizer -> encoder");
 
-    if (mmal_port_enable(jpegencoder->output[0], jpegencoder_buffer_callback) != MMAL_SUCCESS)
+    if (mmal_port_enable(state.jpegencoder->output[0], jpegencoder_buffer_callback) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not enable jpeg port");
-    max = mmal_queue_length(pool_jpegencoder->queue);
+    int max = mmal_queue_length(state.pool_jpegencoder->queue);
+    int i;
     for (i = 0; i < max; i++) {
-        MMAL_BUFFER_HEADER_T *jpegbuffer = mmal_queue_get(pool_jpegencoder->queue);
+        MMAL_BUFFER_HEADER_T *jpegbuffer = mmal_queue_get(state.pool_jpegencoder->queue);
         if (!jpegbuffer)
             errx(EXIT_FAILURE, "Could not create jpeg buffer header");
-        if (mmal_port_send_buffer(jpegencoder->output[0], jpegbuffer) != MMAL_SUCCESS)
+        if (mmal_port_send_buffer(state.jpegencoder->output[0], jpegbuffer) != MMAL_SUCCESS)
             errx(EXIT_FAILURE, "Could not send buffers to jpeg port");
     }
 
@@ -818,14 +818,14 @@ void start_all()
 
 void stop_all()
 {
-    mmal_port_disable(jpegencoder->output[0]);
-    mmal_connection_destroy(con_cam_res);
-    mmal_connection_destroy(con_res_jpeg);
-    mmal_port_pool_destroy(jpegencoder->output[0], pool_jpegencoder);
-    mmal_component_disable(jpegencoder);
-    mmal_component_disable(camera);
-    mmal_component_destroy(jpegencoder);
-    mmal_component_destroy(camera);
+    mmal_port_disable(state.jpegencoder->output[0]);
+    mmal_connection_destroy(state.con_cam_res);
+    mmal_connection_destroy(state.con_res_jpeg);
+    mmal_port_pool_destroy(state.jpegencoder->output[0], state.pool_jpegencoder);
+    mmal_component_disable(state.jpegencoder);
+    mmal_component_disable(state.camera);
+    mmal_component_destroy(state.jpegencoder);
+    mmal_component_destroy(state.camera);
 }
 
 static void server_loop()
