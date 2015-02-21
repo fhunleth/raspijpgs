@@ -514,6 +514,8 @@ static void help(const struct raspi_config_opt *opt, const char *value, int repl
         else
             fprintf(stderr, "  --%-20s\t %s\n", o->long_option, o->help);
     }
+
+    exit(EXIT_SUCCESS);
 }
 
 static int is_long_option(const char *str)
@@ -755,16 +757,35 @@ static void camera_control_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
     mmal_buffer_header_release(buffer);
 }
 
-#include <sys/syscall.h>
-static int gettid()
-{
-	return syscall(SYS_gettid);
-}
-
 static void distribute_jpeg(char *buf, int len)
 {
+    printf("got %d", len);
+    // Send the JPEG to all of our clients
+    int j;
+    for (j = 0; j < MAX_CLIENTS; j++) {
+        if (state.client_addrs[j].sun_family) {
+printf(".");
+            if (sendto(state.socket_fd, buf, len, 0, &state.client_addrs[j], sizeof(struct sockaddr_un)) < 0) {
+                // If failure, then remove client.
+                state.client_addrs[j].sun_family = 0;
+            }
+        }
+    }
+printf("\n");
+    // Handle it ourselves
+}
 
-    printf("got %d; pid=%d,%d\n", len, getpid(), gettid());
+static void recycle_jpegencoder_buffer(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
+{
+    mmal_buffer_header_release(buffer);
+
+    if (port->is_enabled) {
+        MMAL_BUFFER_HEADER_T *new_buffer;
+
+        if (!(new_buffer = mmal_queue_get(state.pool_jpegencoder->queue)) ||
+             mmal_port_send_buffer(port, new_buffer) != MMAL_SUCCESS)
+            errx(EXIT_FAILURE, "Could not send buffers to port");
+    }
 }
 
 static void jpegencoder_buffer_callback_impl()
@@ -802,15 +823,7 @@ static void jpegencoder_buffer_callback_impl()
 
     //cam_set_annotation();
 
-    mmal_buffer_header_release(buffer);
-
-    if (port->is_enabled) {
-        MMAL_BUFFER_HEADER_T *new_buffer;
-
-        if (!(new_buffer = mmal_queue_get(state.pool_jpegencoder->queue)) ||
-             mmal_port_send_buffer(port, new_buffer) != MMAL_SUCCESS)
-            errx(EXIT_FAILURE, "Could not send buffers to port");
-    }
+    recycle_jpegencoder_buffer(port, buffer);
 }
 
 static void jpegencoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
@@ -824,15 +837,7 @@ static void jpegencoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T 
         if (write(state.mmal_callback_pipe[1], msg, sizeof(msg)) != sizeof(msg))
             err(EXIT_FAILURE, "write to internal pipe broke");
     } else {
-        mmal_buffer_header_release(buffer);
-
-        if (port->is_enabled) {
-            MMAL_BUFFER_HEADER_T *new_buffer;
-
-            if (!(new_buffer = mmal_queue_get(state.pool_jpegencoder->queue)) ||
-                 mmal_port_send_buffer(port, new_buffer) != MMAL_SUCCESS)
-                errx(EXIT_FAILURE, "Could not send buffers to port");
-        }
+        recycle_jpegencoder_buffer(port, buffer);
     }
 }
 
@@ -1001,7 +1006,7 @@ static void server_service_client()
                                   &from_addr, &from_addr_len);
     if (bytes_received < 0) {
         if (errno == EINTR)
-            continue;
+            return;
 
         err(EXIT_FAILURE, "recvfrom");
     }
@@ -1020,20 +1025,6 @@ static void server_service_client()
         parse_config_line(line, config_context_client_request);
         line = line_end + 1;
     } while (line_end);
-
-    // Test sending.
-    int i;
-    for (i = 0; i < 5; i++) {
-        int j;
-        for (j = 0; j < MAX_CLIENTS; j++) {
-            if (state.client_addrs[j].sun_family) {
-                if (sendto(state.socket_fd, "hello\n", 6, 0, &state.client_addrs[j], sizeof(struct sockaddr_un)) < 0) {
-                    // If failure, then remove client.
-                    state.client_addrs[j].sun_family = 0;
-                }
-            }
-        }
-    }
 }
 
 static void server_service_mmal()
@@ -1063,8 +1054,6 @@ static void server_loop()
     if (bind(state.socket_fd, (const struct sockaddr *) &state.server_addr, sizeof(struct sockaddr_un)) < 0)
         err(EXIT_FAILURE, "Can't create Unix Domain socket at %s", state.server_addr.sun_path);
     atexit(cleanup_server);
-
-    printf("server started in pid %d, tid %d\n", getpid(), gettid());
 
     // Main loop - keep going until we don't want any more JPEGs.
     struct pollfd fds[2];
@@ -1100,6 +1089,7 @@ static void cleanup_client()
 static void client_loop()
 {
     if (!getenv(RASPIJPGS_OUTPUT)) {
+	printf("no output\n");
         // If no output, force the number of jpegs to capture to be 0 (no place to store them)
         setenv(RASPIJPGS_COUNT, "0", 1);
 
@@ -1107,6 +1097,8 @@ static void client_loop()
             errx(EXIT_FAILURE, "No sets and no place to store output, so nothing to do.\n"
                                "If you meant to run as a server, there's one already running.");
     }
+    // Apply client only options - FIXME
+    state.count = strtol(getenv(RASPIJPGS_COUNT), NULL, 0);
 
     // Create a unix domain socket for messages from the server.
     state.client_addrs[0].sun_family = AF_UNIX;
