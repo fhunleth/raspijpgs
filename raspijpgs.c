@@ -54,6 +54,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <time.h>
 #include <err.h>
 #include <ctype.h>
+#include <poll.h>
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -142,6 +143,9 @@ struct raspijpgs_state
     MMAL_CONNECTION_T *con_cam_res;
     MMAL_CONNECTION_T *con_res_jpeg;
     MMAL_POOL_T *pool_jpegencoder;
+
+    // MMAL callback -> main loop
+    int mmal_callback_pipe[2];
 };
 
 static struct raspijpgs_state state = {0};
@@ -742,7 +746,7 @@ static void cleanup_server()
 
 static void camera_control_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 {
-    // This is called from another thread. Don't use global data here.
+    // This is called from another thread. Don't access any data here.
     UNUSED(port);
 
     if(buffer->cmd != MMAL_EVENT_PARAMETER_CHANGED)
@@ -763,35 +767,41 @@ static void distribute_jpeg(char *buf, int len)
     printf("got %d; pid=%d,%d\n", len, getpid(), gettid());
 }
 
-static void jpegencoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
+static void jpegencoder_buffer_callback_impl()
 {
-    if(buffer->length) {
-        mmal_buffer_header_mem_lock(buffer);
+    void *msg[2];
+    if (read(state.mmal_callback_pipe[0], msg, sizeof(msg)) != sizeof(msg))
+        err(EXIT_FAILURE, "read from internal pipe broke");
 
-        if (state.buffer_ix == 0 &&
-                (buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END) &&
-                buffer->length <= MAX_DATA_BUFFER_SIZE) {
-            // Easy case: JPEG all in one buffer
-            distribute_jpeg(buffer->data, buffer->length);
+    MMAL_PORT_T *port = (MMAL_PORT_T *) msg[0];
+    MMAL_BUFFER_HEADER_T *buffer = (MMAL_BUFFER_HEADER_T *) msg[1];
+
+    mmal_buffer_header_mem_lock(buffer);
+
+    if (state.buffer_ix == 0 &&
+            (buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END) &&
+            buffer->length <= MAX_DATA_BUFFER_SIZE) {
+        // Easy case: JPEG all in one buffer
+        distribute_jpeg(buffer->data, buffer->length);
+    } else {
+        // Hard case: assemble JPEG
+        if (state.buffer_ix + buffer->length > MAX_DATA_BUFFER_SIZE) {
+            warnx("Frame too large (%d bytes). Dropping. Adjust MAX_DATA_BUFFER_SIZE.", state.buffer_ix + buffer->length);
         } else {
-            // Hard case: assemble JPEG
-            if (state.buffer_ix + buffer->length > MAX_DATA_BUFFER_SIZE) {
-                warnx("Frame too large (%d bytes). Dropping. Adjust MAX_DATA_BUFFER_SIZE.", state.buffer_ix + buffer->length);
-            } else {
-                memcpy(&state.buffer[state.buffer_ix], buffer->data, buffer->length);
-                state.buffer_ix += buffer->length;
-                if (buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END)
-                    distribute_jpeg(state.buffer, state.buffer_ix);
-            }
+            memcpy(&state.buffer[state.buffer_ix], buffer->data, buffer->length);
+            state.buffer_ix += buffer->length;
+            if (buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END)
+                distribute_jpeg(state.buffer, state.buffer_ix);
         }
-
-        mmal_buffer_header_mem_unlock(buffer);
-
-        if (state.count >= 0)
-            state.count--;
-
-        //cam_set_annotation();
     }
+
+    mmal_buffer_header_mem_unlock(buffer);
+
+    if (state.count >= 0)
+        state.count--;
+
+    //cam_set_annotation();
+
     mmal_buffer_header_release(buffer);
 
     if (port->is_enabled) {
@@ -800,6 +810,29 @@ static void jpegencoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T 
         if (!(new_buffer = mmal_queue_get(state.pool_jpegencoder->queue)) ||
              mmal_port_send_buffer(port, new_buffer) != MMAL_SUCCESS)
             errx(EXIT_FAILURE, "Could not send buffers to port");
+    }
+}
+
+static void jpegencoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
+{
+    // If the buffer contains something, notify our main thread to process it.
+    // If not, recycle it.
+    if (buffer->length) {
+        void *msg[2];
+        msg[0] = port;
+        msg[1] = buffer;
+        if (write(state.mmal_callback_pipe[1], msg, sizeof(msg)) != sizeof(msg))
+            err(EXIT_FAILURE, "write to internal pipe broke");
+    } else {
+        mmal_buffer_header_release(buffer);
+
+        if (port->is_enabled) {
+            MMAL_BUFFER_HEADER_T *new_buffer;
+
+            if (!(new_buffer = mmal_queue_get(state.pool_jpegencoder->queue)) ||
+                 mmal_port_send_buffer(port, new_buffer) != MMAL_SUCCESS)
+                errx(EXIT_FAILURE, "Could not send buffers to port");
+        }
     }
 }
 
@@ -958,6 +991,56 @@ void stop_all()
     mmal_component_destroy(state.camera);
 }
 
+static void server_service_client()
+{
+    struct sockaddr_un from_addr = {0};
+    socklen_t from_addr_len = sizeof(struct sockaddr_un);
+
+    int bytes_received = recvfrom(state.socket_fd,
+                                  state.buffer, MAX_DATA_BUFFER_SIZE, 0,
+                                  &from_addr, &from_addr_len);
+    if (bytes_received < 0) {
+        if (errno == EINTR)
+            continue;
+
+        err(EXIT_FAILURE, "recvfrom");
+    }
+
+    add_client(&from_addr);
+
+    state.buffer[bytes_received] = 0;
+    printf("Got %d bytes from client\n", bytes_received);
+    printf("'%s'\n", state.buffer);
+    char *line = state.buffer;
+    char *line_end;
+    do {
+        line_end = strchr(line, '\n');
+        if (line_end)
+            *line_end = '\0';
+        parse_config_line(line, config_context_client_request);
+        line = line_end + 1;
+    } while (line_end);
+
+    // Test sending.
+    int i;
+    for (i = 0; i < 5; i++) {
+        int j;
+        for (j = 0; j < MAX_CLIENTS; j++) {
+            if (state.client_addrs[j].sun_family) {
+                if (sendto(state.socket_fd, "hello\n", 6, 0, &state.client_addrs[j], sizeof(struct sockaddr_un)) < 0) {
+                    // If failure, then remove client.
+                    state.client_addrs[j].sun_family = 0;
+                }
+            }
+        }
+    }
+}
+
+static void server_service_mmal()
+{
+    jpegencoder_buffer_callback_impl();
+}
+
 static void server_loop()
 {
     // Check if the user meant to run as a client and the server is dead
@@ -966,6 +1049,11 @@ static void server_loop()
 
     // Init hardware
     bcm_host_init();
+
+    // Create the file descriptors for getting back to the main thread
+    // from the MMAL callbacks.
+    if (pipe(state.mmal_callback_pipe) < 0)
+        err(EXIT_FAILURE, "pipe");
 
     start_all();
     apply_parameters(config_context_server_start);
@@ -979,51 +1067,28 @@ static void server_loop()
     printf("server started in pid %d, tid %d\n", getpid(), gettid());
 
     // Main loop - keep going until we don't want any more JPEGs.
+    struct pollfd fds[2];
+    fds[0].fd = state.socket_fd;
+    fds[0].events = POLLIN;
+    fds[1].fd = state.mmal_callback_pipe[0];
+    fds[1].events = POLLIN;
+
     while (state.count != 0) {
-        struct sockaddr_un from_addr = {0};
-        socklen_t from_addr_len = sizeof(struct sockaddr_un);
-
-        int bytes_received = recvfrom(state.socket_fd,
-                                      state.buffer, MAX_DATA_BUFFER_SIZE, 0,
-                                      &from_addr, &from_addr_len);
-        if (bytes_received < 0) {
-            if (errno == EINTR)
-                continue;
-
-            err(EXIT_FAILURE, "recvfrom");
-        }
-
-        add_client(&from_addr);
-
-        state.buffer[bytes_received] = 0;
-        printf("Got %d bytes from client\n", bytes_received);
-        printf("'%s'\n", state.buffer);
-        char *line = state.buffer;
-        char *line_end;
-        do {
-            line_end = strchr(line, '\n');
-            if (line_end)
-                *line_end = '\0';
-            parse_config_line(line, config_context_client_request);
-            line = line_end + 1;
-        } while (line_end);
-
-        // Test sending.
-        int i;
-        for (i = 0; i < 5; i++) {
-            int j;
-            for (j = 0; j < MAX_CLIENTS; j++) {
-                if (state.client_addrs[j].sun_family) {
-                    if (sendto(state.socket_fd, "hello\n", 6, 0, &state.client_addrs[j], sizeof(struct sockaddr_un)) < 0) {
-                        // If failure, then remove client.
-                        state.client_addrs[j].sun_family = 0;
-                    }
-                }
-            }
+        int ready = poll(fds, 2, -1);
+        if (ready < 0) {
+            if (errno != EINTR)
+                err(EXIT_FAILURE, "poll");
+        } else {
+            if (fds[0].revents)
+                server_service_client();
+            if (fds[1].revents)
+                server_service_mmal();
         }
     }
 
     stop_all();
+    close(state.mmal_callback_pipe[0]);
+    close(state.mmal_callback_pipe[1]);
 }
 
 static void cleanup_client()
