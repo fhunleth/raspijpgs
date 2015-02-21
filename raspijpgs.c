@@ -60,12 +60,29 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <sys/un.h>
 #include <unistd.h>
 
+#include "bcm_host.h"
+#include "interface/vcos/vcos.h"
+#include "interface/mmal/mmal.h"
+#include "interface/mmal/mmal_logging.h"
+#include "interface/mmal/mmal_buffer.h"
+#include "interface/mmal/util/mmal_util.h"
+#include "interface/mmal/util/mmal_util_params.h"
+#include "interface/mmal/util/mmal_default_components.h"
+#include "interface/mmal/util/mmal_connection.h"
+
 #define MAX_CLIENTS                 8
 #define MAX_DATA_BUFFER_SIZE        65536
 
 #define UNUSED(expr) do { (void)(expr); } while (0)
 
 // Globals
+
+enum config_context {
+    config_context_file,
+    config_context_server_start,
+    config_context_client_request
+};
+
 struct raspijpgs_state
 {
     // Settings
@@ -207,7 +224,7 @@ static void rational_param_apply(int mmal_param, const struct raspi_config_opt *
             return;
     }
     MMAL_RATIONAL_T mmal_value = {value, 100};
-    status = mmal_port_parameter_set_rational(camera->control, mmal_param, mmal_value);
+    MMAL_STATUS_T status = mmal_port_parameter_set_rational(camera->control, mmal_param, mmal_value);
     if(status != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
 }
@@ -233,7 +250,7 @@ static void ISO_apply(const struct raspi_config_opt *opt, enum config_context co
 {
     UNUSED(context);
     unsigned int value = strtoul(getenv(opt->env_key), 0, 0);
-    status = mmal_port_parameter_set_uint32(camera->control, MMAL_PARAMETER_ISO, value);
+    MMAL_STATUS_T status = mmal_port_parameter_set_uint32(camera->control, MMAL_PARAMETER_ISO, value);
     if(status != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
 }
@@ -241,7 +258,7 @@ static void vstab_apply(const struct raspi_config_opt *opt, enum config_context 
 {
     UNUSED(context);
     unsigned int value = (strcmp(getenv(opt->env_key), "on") == 0);
-    status = mmal_port_parameter_set_uint32(camera->control, MMAL_PARAMETER_VIDEO_STABILISATION, value);
+    MMAL_STATUS_T status = mmal_port_parameter_set_uint32(camera->control, MMAL_PARAMETER_VIDEO_STABILISATION, value);
     if(status != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
 }
@@ -328,7 +345,7 @@ static struct raspi_config_opt opts[] =
     {"annotation",  "a",    RASPIJPGS_ANNOTATION,   "Annotation on the video frames",                       0,          default_set, annotation_apply},
     {"anno_background", "ab", RASPIJPGS_ANNO_BACKGROUND, "Turn on a black background behind the annotation", "off",     default_set, anno_background_apply},
     {"sharpness",   "sh",   RASPIJPGS_SHARPNESS,    "Set image sharpness (-100 to 100)",                    "0",        default_set, sharpness_apply},
-    {"contrast",    "co",   RASPIJPGS_CONTRAST,     "Set image contrast (-100 to 100)",                     "0",        default_set, constrast_apply},
+    {"contrast",    "co",   RASPIJPGS_CONTRAST,     "Set image contrast (-100 to 100)",                     "0",        default_set, contrast_apply},
     {"brightness",  "br",   RASPIJPGS_BRIGHTNESS,   "Set image brightness (0 to 100)",                      "50",       default_set, brightness_apply},
     {"saturation",  "sa",   RASPIJPGS_SATURATION,   "Set image saturation (-100 to 100)",                   "0",        default_set, saturation_apply},
     {"ISO",         "ISO",  RASPIJPGS_ISO,          "Set capture ISO (100 to 800)",                         0,          default_set, ISO_apply},
@@ -397,12 +414,12 @@ static void fillin_defaults()
     }
 }
 
-static void apply_parameters()
+static void apply_parameters(enum config_context context)
 {
     const struct raspi_config_opt *opt;
     for (opt = opts; opt->long_option; opt++) {
         if (opt->apply)
-            opt->apply(opt);
+            opt->apply(opt, context);
     }
 }
 
@@ -461,12 +478,6 @@ static void trim_whitespace(char *s)
     s[len] = 0;
 }
 
-enum config_context {
-    config_context_file,
-    config_context_server_start,
-    config_context_client_request
-};
-
 static void parse_config_line(const char *line, enum config_context context)
 {
     char *str = strdup(line);
@@ -515,7 +526,7 @@ static void parse_config_line(const char *line, enum config_context context)
     case config_context_client_request:
         opt->set(opt, value, 1);
         if (opt->apply)
-            opt->apply(opt);
+            opt->apply(opt, context);
         break;
     }
     free(str);
@@ -630,7 +641,7 @@ static void jpegencoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T 
         mmal_buffer_header_mem_lock(buffer);
 
         if (state.buffer_ix == 0 &&
-                (state.buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END) &&
+                (buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END) &&
                 buffer->length <= MAX_DATA_BUFFER_SIZE) {
             // Easy case: JPEG all in one buffer
             distribute_jpeg(buffer->data, buffer->length);
@@ -641,7 +652,7 @@ static void jpegencoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T 
             } else {
                 memcpy(&state.buffer[state.buffer_ix], buffer->data, buffer->length);
                 state.buffer_ix += buffer->length;
-                if (state.buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END)
+                if (buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END)
                     distribute_jpeg(state.buffer, state.buffer_ix);
             }
         }
@@ -827,7 +838,7 @@ static void server_loop()
     bcm_host_init();
 
     start_all();
-    apply_parameters();
+    apply_parameters(config_context_server_start);
 
     // Init communications
     unlink(state.server_addr.sun_path);
@@ -849,8 +860,8 @@ static void server_loop()
 
         state.buffer[bytes_received] = 0;
         printf("Got %d bytes from client\n", bytes_received);
-        printf("'%s'\n", rxbuffer);
-        char *line = rxbuffer;
+        printf("'%s'\n", state.buffer);
+        char *line = state.buffer;
         char *line_end;
         do {
             line_end = strchr(line, '\n');
@@ -894,8 +905,6 @@ static void client_loop()
             errx(EXIT_FAILURE, "No sets and no place to store output, so nothing to do.\n"
                                "If you meant to run as a server, there's one already running.");
     }
-
-    apply_parameters();
 
     // Create a unix domain socket for messages from the server.
     state.client_addrs[0].sun_family = AF_UNIX;
