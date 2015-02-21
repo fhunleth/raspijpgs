@@ -75,6 +75,34 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define UNUSED(expr) do { (void)(expr); } while (0)
 
+// Environment config keys
+#define RASPIJPGS_WIDTH             "RASPIJPGS_WIDTH"
+#define RASPIJPGS_ANNOTATION        "RASPIJPGS_ANNOTATION"
+#define RASPIJPGS_ANNO_BACKGROUND   "RASPIJPGS_ANNO_BACKGROUND"
+#define RASPIJPGS_SHARPNESS         "RASPIJPGS_SHARPNESS"
+#define RASPIJPGS_CONTRAST          "RASPIJPGS_CONTRAST"
+#define RASPIJPGS_BRIGHTNESS        "RASPIJPGS_BRIGHTNESS"
+#define RASPIJPGS_SATURATION        "RASPIJPGS_SATURATION"
+#define RASPIJPGS_ISO               "RASPIJPGS_ISO"
+#define RASPIJPGS_VSTAB             "RASPIJPGS_VSTAB"
+#define RASPIJPGS_EV                "RASPIJPGS_EV"
+#define RASPIJPGS_EXPOSURE          "RASPIJPGS_EXPOSURE"
+#define RASPIJPGS_AWB               "RASPIJPGS_AWB"
+#define RASPIJPGS_IMXFX             "RASPIJPGS_IMXFX"
+#define RASPIJPGS_COLFX             "RASPIJPGS_COLFX"
+#define RASPIJPGS_METERING          "RASPIJPGS_METERING"
+#define RASPIJPGS_ROTATION          "RASPIJPGS_ROTATION"
+#define RASPIJPGS_HFLIP             "RASPIJPGS_HFLIP"
+#define RASPIJPGS_VFLIP             "RASPIJPGS_VFLIP"
+#define RASPIJPGS_ROI               "RASPIJPGS_ROI"
+#define RASPIJPGS_SHUTTER           "RASPIJPGS_SHUTTER"
+#define RASPIJPGS_QUALITY           "RASPIJPGS_QUALITY"
+#define RASPIJPGS_SOCKET            "RASPIJPGS_SOCKET"
+#define RASPIJPGS_OUTPUT            "RASPIJPGS_OUTPUT"
+#define RASPIJPGS_COUNT             "RASPIJPGS_COUNT"
+#define RASPIJPGS_LOCKFILE          "RASPIJPGS_LOCKFILE"
+
+
 // Globals
 
 enum config_context {
@@ -249,9 +277,7 @@ static void saturation_apply(const struct raspi_config_opt *opt, enum config_con
 static void ISO_apply(const struct raspi_config_opt *opt, enum config_context context)
 {
     UNUSED(context);
-warnx("ISO");
     unsigned int value = strtoul(getenv(opt->env_key), 0, 0);
-warnx("Got ISO: %d", value);
     MMAL_STATUS_T status = mmal_port_parameter_set_uint32(state.camera->control, MMAL_PARAMETER_ISO, value);
     if(status != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
@@ -264,11 +290,14 @@ static void vstab_apply(const struct raspi_config_opt *opt, enum config_context 
     if(status != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
 }
-static void ev_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
+static void ev_apply(const struct raspi_config_opt *opt, enum config_context context)
+{
+    // TODO
+    UNUSED(opt);
+    UNUSED(context);
+}
 static void exposure_apply(const struct raspi_config_opt *opt, enum config_context context)
 {
-    UNUSED(context);
-
     MMAL_PARAM_EXPOSUREMODE_T mode;
     const char *str = getenv(opt->env_key);
     if(strcmp(str, "off") == 0) mode = MMAL_PARAM_EXPOSUREMODE_OFF;
@@ -291,54 +320,143 @@ static void exposure_apply(const struct raspi_config_opt *opt, enum config_conte
             return;
     }
 
-    MMAL_PARAMETER_EXPOSUREMODE_T exp_mode = {{MMAL_PARAMETER_EXPOSURE_MODE,sizeof(exp_mode)}, mode};
-    if (mmal_port_parameter_set(state.camera->control, &exp_mode.hdr) != MMAL_SUCCESS)
+    MMAL_PARAMETER_EXPOSUREMODE_T param = {{MMAL_PARAMETER_EXPOSURE_MODE,sizeof(param)}, mode};
+    if (mmal_port_parameter_set(state.camera->control, &param.hdr) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
 }
 static void awb_apply(const struct raspi_config_opt *opt, enum config_context context)
 {
-    UNUSED(opt);
+    MMAL_PARAM_AWBMODE_T awb_mode;
+    const char *str = getenv(opt->env_key);
+    if(strcmp(str, "off") == 0) awb_mode = MMAL_PARAM_AWBMODE_OFF;
+    else if(strcmp(str, "auto") == 0) awb_mode = MMAL_PARAM_AWBMODE_AUTO;
+    else if(strcmp(str, "sun") == 0) awb_mode = MMAL_PARAM_AWBMODE_SUNLIGHT;
+    else if(strcmp(str, "cloudy") == 0) awb_mode = MMAL_PARAM_AWBMODE_CLOUDY;
+    else if(strcmp(str, "shade") == 0) awb_mode = MMAL_PARAM_AWBMODE_SHADE;
+    else if(strcmp(str, "tungsten") == 0) awb_mode = MMAL_PARAM_AWBMODE_TUNGSTEN;
+    else if(strcmp(str, "fluorescent") == 0) awb_mode = MMAL_PARAM_AWBMODE_FLUORESCENT;
+    else if(strcmp(str, "incandescent") == 0) awb_mode = MMAL_PARAM_AWBMODE_INCANDESCENT;
+    else if(strcmp(str, "flash") == 0) awb_mode = MMAL_PARAM_AWBMODE_FLASH;
+    else if(strcmp(str, "horizon") == 0) awb_mode = MMAL_PARAM_AWBMODE_HORIZON;
+    else {
+        if (context == config_context_server_start)
+            errx(EXIT_FAILURE, "Invalid %s", opt->long_option);
+        else
+            return;
+    }
+    MMAL_PARAMETER_AWBMODE_T param = {{MMAL_PARAMETER_AWB_MODE,sizeof(param)}, awb_mode};
+    if (mmal_port_parameter_set(state.camera->control, &param.hdr) != MMAL_SUCCESS)
+        errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
 }
-static void imxfx_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
-static void colfx_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
-static void metering_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
-static void rotation_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
-static void hflip_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
-static void vflip_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
-static void roi_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
-static void shutter_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
-static void quality_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
+static void imxfx_apply(const struct raspi_config_opt *opt, enum config_context context)
+{
+    MMAL_PARAM_IMAGEFX_T imageFX;
+    const char *str = getenv(opt->env_key);
+    if(strcmp(str, "none") == 0) imageFX = MMAL_PARAM_IMAGEFX_NONE;
+    else if(strcmp(str, "negative") == 0) imageFX = MMAL_PARAM_IMAGEFX_NEGATIVE;
+    else if(strcmp(str, "solarise") == 0) imageFX = MMAL_PARAM_IMAGEFX_SOLARIZE;
+    else if(strcmp(str, "sketch") == 0) imageFX = MMAL_PARAM_IMAGEFX_SKETCH;
+    else if(strcmp(str, "denoise") == 0) imageFX = MMAL_PARAM_IMAGEFX_DENOISE;
+    else if(strcmp(str, "emboss") == 0) imageFX = MMAL_PARAM_IMAGEFX_EMBOSS;
+    else if(strcmp(str, "oilpaint") == 0) imageFX = MMAL_PARAM_IMAGEFX_OILPAINT;
+    else if(strcmp(str, "hatch") == 0) imageFX = MMAL_PARAM_IMAGEFX_HATCH;
+    else if(strcmp(str, "gpen") == 0) imageFX = MMAL_PARAM_IMAGEFX_GPEN;
+    else if(strcmp(str, "pastel") == 0) imageFX = MMAL_PARAM_IMAGEFX_PASTEL;
+    else if(strcmp(str, "watercolour") == 0) imageFX = MMAL_PARAM_IMAGEFX_WATERCOLOUR;
+    else if(strcmp(str, "film") == 0) imageFX = MMAL_PARAM_IMAGEFX_FILM;
+    else if(strcmp(str, "blur") == 0) imageFX = MMAL_PARAM_IMAGEFX_BLUR;
+    else if(strcmp(str, "saturation") == 0) imageFX = MMAL_PARAM_IMAGEFX_SATURATION;
+    else if(strcmp(str, "colourswap") == 0) imageFX = MMAL_PARAM_IMAGEFX_COLOURSWAP;
+    else if(strcmp(str, "washedout") == 0) imageFX = MMAL_PARAM_IMAGEFX_WASHEDOUT;
+    else if(strcmp(str, "posterise") == 0) imageFX = MMAL_PARAM_IMAGEFX_POSTERISE;
+    else if(strcmp(str, "colourpoint") == 0) imageFX = MMAL_PARAM_IMAGEFX_COLOURPOINT;
+    else if(strcmp(str, "colourbalance") == 0) imageFX = MMAL_PARAM_IMAGEFX_COLOURBALANCE;
+    else if(strcmp(str, "cartoon") == 0) imageFX = MMAL_PARAM_IMAGEFX_CARTOON;
+    else {
+        if (context == config_context_server_start)
+            errx(EXIT_FAILURE, "Invalid %s", opt->long_option);
+        else
+            return;
+    }
+    MMAL_PARAMETER_IMAGEFX_T param = {{MMAL_PARAMETER_IMAGE_EFFECT,sizeof(param)}, imageFX};
+    if (mmal_port_parameter_set(state.camera->control, &param.hdr) != MMAL_SUCCESS)
+        errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
+}
+static void colfx_apply(const struct raspi_config_opt *opt, enum config_context context)
+{
+    // Color effect is specified as u:v. Anything else means off.
+    MMAL_PARAMETER_COLOURFX_T param = {{MMAL_PARAMETER_COLOUR_EFFECT,sizeof(param)}, 0, 0, 0};
+    const char *str = getenv(opt->env_key);
+    if (sscanf(str, "%d:%d", &params.u, &params.v) == 2 &&
+            params.u < 256 &&
+            params.v < 256)
+        params.enable = 1;
+    else
+        params.enable = 0;
+    if (mmal_port_parameter_set(state.camera->control, &param.hdr) != MMAL_SUCCESS)
+        errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
+}
+static void metering_apply(const struct raspi_config_opt *opt, enum config_context context)
+{
+    MMAL_PARAM_EXPOSUREMETERINGMODE_T m_mode;
+    const char *str = getenv(opt->env_key);
+    if(strcmp(str, "average") == 0) m_mode = MMAL_PARAM_EXPOSUREMETERINGMODE_AVERAGE;
+    else if(strcmp(str, "spot") == 0) m_mode = MMAL_PARAM_EXPOSUREMETERINGMODE_SPOT;
+    else if(strcmp(str, "backlit") == 0) m_mode = MMAL_PARAM_EXPOSUREMETERINGMODE_BACKLIT;
+    else if(strcmp(str, "matrix") == 0) m_mode = MMAL_PARAM_EXPOSUREMETERINGMODE_MATRIX;
+    else {
+        if (context == config_context_server_start)
+            errx(EXIT_FAILURE, "Invalid %s", opt->long_option);
+        else
+            return;
+    }
+    MMAL_PARAMETER_EXPOSUREMETERINGMODE_T param = {{MMAL_PARAMETER_EXP_METERING_MODE,sizeof(param)}, m_mode};
+    if (mmal_port_parameter_set(state.camera->control, &param.hdr) != MMAL_SUCCESS)
+        errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
+}
+static void rotation_apply(const struct raspi_config_opt *opt, enum config_context context)
+{
+    UNUSED(context);
+    int value = strtol(getenv(opt->env_key), NULL, 0);
+    if (mmal_port_parameter_set_int32(state.camera->output[0], MMAL_PARAMETER_ROTATION, value) != MMAL_SUCCESS)
+        errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
+}
+static void flip_apply(const struct raspi_config_opt *opt, enum config_context context)
+{
+    UNUSED(context);
+
+    MMAL_PARAMETER_MIRROR_T mirror = {{MMAL_PARAMETER_MIRROR, sizeof(MMAL_PARAMETER_MIRROR_T)}, MMAL_PARAM_MIRROR_NONE};
+    if (strcmp(getenv(RASPIJPGS_HFLIP), "on") == 0)
+        mirror.value = MMAL_PARAM_MIRROR_HORIZONTAL;
+    if (strcmp(getenv(RASPIJPGS_VFLIP), "on") == 0)
+        mirror.value = (mirror.value == MMAL_PARAM_MIRROR_HORIZONTAL ? MMAL_PARAM_MIRROR_BOTH : MMAL_PARAM_MIRROR_VERTICAL);
+
+    if (mmal_port_parameter_set(state.camera->output[0], &mirror.hdr) != MMAL_SUCCESS)
+        errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
+}
+static void roi_apply(const struct raspi_config_opt *opt, enum config_context context)
+{
+    // TODO
+    UNUSED(opt);
+    UNUSED(context);
+}
+static void shutter_apply(const struct raspi_config_opt *opt, enum config_context context)
+{
+    UNUSED(context);
+    int value = strtoul(getenv(opt->env_key), NULL, 0);
+    if (mmal_port_parameter_set_uint32(state.camera->control, MMAL_PARAMETER_SHUTTER_SPEED, value) != MMAL_SUCCESS)
+        errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
+}
+static void quality_apply(const struct raspi_config_opt *opt, enum config_context context)
+{
+    // TODO
+    UNUSED(opt);
+    UNUSED(context);
+}
 static void count_apply(const struct raspi_config_opt *opt, enum config_context context)
 {
     state.count = strtol(getenv(opt->env_key), NULL, 0);
 }
-
-// Config keys
-#define RASPIJPGS_WIDTH             "RASPIJPGS_WIDTH"
-#define RASPIJPGS_ANNOTATION        "RASPIJPGS_ANNOTATION"
-#define RASPIJPGS_ANNO_BACKGROUND   "RASPIJPGS_ANNO_BACKGROUND"
-#define RASPIJPGS_SHARPNESS         "RASPIJPGS_SHARPNESS"
-#define RASPIJPGS_CONTRAST          "RASPIJPGS_CONTRAST"
-#define RASPIJPGS_BRIGHTNESS        "RASPIJPGS_BRIGHTNESS"
-#define RASPIJPGS_SATURATION        "RASPIJPGS_SATURATION"
-#define RASPIJPGS_ISO               "RASPIJPGS_ISO"
-#define RASPIJPGS_VSTAB             "RASPIJPGS_VSTAB"
-#define RASPIJPGS_EV                "RASPIJPGS_EV"
-#define RASPIJPGS_EXPOSURE          "RASPIJPGS_EXPOSURE"
-#define RASPIJPGS_AWB               "RASPIJPGS_AWB"
-#define RASPIJPGS_IMXFX             "RASPIJPGS_IMXFX"
-#define RASPIJPGS_COLFX             "RASPIJPGS_COLFX"
-#define RASPIJPGS_METERING          "RASPIJPGS_METERING"
-#define RASPIJPGS_ROTATION          "RASPIJPGS_ROTATION"
-#define RASPIJPGS_HFLIP             "RASPIJPGS_HFLIP"
-#define RASPIJPGS_VFLIP             "RASPIJPGS_VFLIP"
-#define RASPIJPGS_ROI               "RASPIJPGS_ROI"
-#define RASPIJPGS_SHUTTER           "RASPIJPGS_SHUTTER"
-#define RASPIJPGS_QUALITY           "RASPIJPGS_QUALITY"
-#define RASPIJPGS_SOCKET            "RASPIJPGS_SOCKET"
-#define RASPIJPGS_OUTPUT            "RASPIJPGS_OUTPUT"
-#define RASPIJPGS_COUNT             "RASPIJPGS_COUNT"
-#define RASPIJPGS_LOCKFILE          "RASPIJPGS_LOCKFILE"
 
 static struct raspi_config_opt opts[] =
 {
@@ -356,11 +474,11 @@ static struct raspi_config_opt opts[] =
     {"exposure",    "ex",   RASPIJPGS_EXPOSURE,     "Set exposure mode",                                    "auto",     default_set, exposure_apply},
     {"awb",         "awb",  RASPIJPGS_AWB,          "Set Automatic White Balance (AWB) mode",               "auto",     default_set, awb_apply},
     {"imxfx",       "ifx",  RASPIJPGS_IMXFX,        "Set image effect",                                     "none",     default_set, imxfx_apply},
-    {"colfx",       "cfx",  RASPIJPGS_COLFX,        "Set colour effect <U:V>",                              "128:128",  default_set, colfx_apply},
+    {"colfx",       "cfx",  RASPIJPGS_COLFX,        "Set colour effect <U:V>",                              "",         default_set, colfx_apply},
     {"metering",    "mm",   RASPIJPGS_METERING,     "Set metering mode",                                    "average",  default_set, metering_apply},
     {"rotation",    "rot",  RASPIJPGS_ROTATION,     "Set image rotation (0-359)",                           "0",        default_set, rotation_apply},
-    {"hflip",       "hf",   RASPIJPGS_HFLIP,        "Set horizontal flip",                                  "off",      default_set, hflip_apply},
-    {"vflip",       "vf",   RASPIJPGS_VFLIP,        "Set vertical flip",                                    "off",      default_set, vflip_apply},
+    {"hflip",       "hf",   RASPIJPGS_HFLIP,        "Set horizontal flip",                                  "off",      default_set, flip_apply},
+    {"vflip",       "vf",   RASPIJPGS_VFLIP,        "Set vertical flip",                                    "off",      default_set, flip_apply},
     {"roi",         "roi",  RASPIJPGS_ROI,          "Set sensor region of interest",                        "0:0:65536:65536", default_set, roi_apply},
     {"shutter",     "ss",   RASPIJPGS_SHUTTER,      "Set shutter speed",                                    "0",        default_set, shutter_apply},
     {"quality",     "q",    RASPIJPGS_QUALITY,      "Set the JPEG quality (0-100)",                         "75",       default_set, quality_apply},
@@ -624,6 +742,7 @@ static void cleanup_server()
 
 static void camera_control_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
 {
+    // This is called from another thread. Don't use global data here.
     UNUSED(port);
 
     if(buffer->cmd != MMAL_EVENT_PARAMETER_CHANGED)
@@ -635,7 +754,7 @@ static void camera_control_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
 static void distribute_jpeg(char *buf, int len)
 {
 
-    printf("got %d\n", len);
+    printf("got %d; pid=%d\n", len, getpid());
 }
 
 static void jpegencoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
@@ -850,6 +969,8 @@ static void server_loop()
     if (bind(state.socket_fd, (const struct sockaddr *) &state.server_addr, sizeof(struct sockaddr_un)) < 0)
         err(EXIT_FAILURE, "Can't create Unix Domain socket at %s", state.server_addr.sun_path);
     atexit(cleanup_server);
+
+    printf("server started in pid %d\n", getpid());
 
     // Main loop - keep going until we don't want any more JPEGs.
     while (state.count != 0) {
