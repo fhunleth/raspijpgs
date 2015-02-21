@@ -249,7 +249,9 @@ static void saturation_apply(const struct raspi_config_opt *opt, enum config_con
 static void ISO_apply(const struct raspi_config_opt *opt, enum config_context context)
 {
     UNUSED(context);
+warnx("ISO");
     unsigned int value = strtoul(getenv(opt->env_key), 0, 0);
+warnx("Got ISO: %d", value);
     MMAL_STATUS_T status = mmal_port_parameter_set_uint32(state.camera->control, MMAL_PARAMETER_ISO, value);
     if(status != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
@@ -342,28 +344,28 @@ static struct raspi_config_opt opts[] =
 {
     // long_option  short   env_key                  help                                                    default
     {"width",       "w",    RASPIJPGS_WIDTH,        "Set image width <size>",                               "320",      default_set, width_apply},
-    {"annotation",  "a",    RASPIJPGS_ANNOTATION,   "Annotation on the video frames",                       0,          default_set, annotation_apply},
+    {"annotation",  "a",    RASPIJPGS_ANNOTATION,   "Annotation on the video frames",                       "",         default_set, annotation_apply},
     {"anno_background", "ab", RASPIJPGS_ANNO_BACKGROUND, "Turn on a black background behind the annotation", "off",     default_set, anno_background_apply},
     {"sharpness",   "sh",   RASPIJPGS_SHARPNESS,    "Set image sharpness (-100 to 100)",                    "0",        default_set, sharpness_apply},
     {"contrast",    "co",   RASPIJPGS_CONTRAST,     "Set image contrast (-100 to 100)",                     "0",        default_set, contrast_apply},
     {"brightness",  "br",   RASPIJPGS_BRIGHTNESS,   "Set image brightness (0 to 100)",                      "50",       default_set, brightness_apply},
     {"saturation",  "sa",   RASPIJPGS_SATURATION,   "Set image saturation (-100 to 100)",                   "0",        default_set, saturation_apply},
-    {"ISO",         "ISO",  RASPIJPGS_ISO,          "Set capture ISO (100 to 800)",                         0,          default_set, ISO_apply},
+    {"ISO",         "ISO",  RASPIJPGS_ISO,          "Set capture ISO (100 to 800)",                         "0",        default_set, ISO_apply},
     {"vstab",       "vs",   RASPIJPGS_VSTAB,        "Turn on video stabilisation",                          "off",      default_set, vstab_apply},
     {"ev",          "ev",   RASPIJPGS_EV,           "Set EV compensation (-10 to 10)",                      "0",        default_set, ev_apply},
     {"exposure",    "ex",   RASPIJPGS_EXPOSURE,     "Set exposure mode",                                    "auto",     default_set, exposure_apply},
     {"awb",         "awb",  RASPIJPGS_AWB,          "Set Automatic White Balance (AWB) mode",               "auto",     default_set, awb_apply},
     {"imxfx",       "ifx",  RASPIJPGS_IMXFX,        "Set image effect",                                     "none",     default_set, imxfx_apply},
-    {"colfx",       "cfx",  RASPIJPGS_COLFX,        "Set colour effect <U:V>",                              0,          default_set, colfx_apply},
-    {"metering",    "mm",   RASPIJPGS_METERING,     "Set metering mode",                                    "average",         default_set, metering_apply},
+    {"colfx",       "cfx",  RASPIJPGS_COLFX,        "Set colour effect <U:V>",                              "128:128",  default_set, colfx_apply},
+    {"metering",    "mm",   RASPIJPGS_METERING,     "Set metering mode",                                    "average",  default_set, metering_apply},
     {"rotation",    "rot",  RASPIJPGS_ROTATION,     "Set image rotation (0-359)",                           "0",        default_set, rotation_apply},
     {"hflip",       "hf",   RASPIJPGS_HFLIP,        "Set horizontal flip",                                  "off",      default_set, hflip_apply},
     {"vflip",       "vf",   RASPIJPGS_VFLIP,        "Set vertical flip",                                    "off",      default_set, vflip_apply},
     {"roi",         "roi",  RASPIJPGS_ROI,          "Set sensor region of interest",                        "0:0:65536:65536", default_set, roi_apply},
-    {"shutter",     "ss",   RASPIJPGS_SHUTTER,      "Set shutter speed",                                    0,          default_set, shutter_apply},
+    {"shutter",     "ss",   RASPIJPGS_SHUTTER,      "Set shutter speed",                                    "0",        default_set, shutter_apply},
     {"quality",     "q",    RASPIJPGS_QUALITY,      "Set the JPEG quality (0-100)",                         "75",       default_set, quality_apply},
     {"socket",      0,      RASPIJPGS_SOCKET,       "Specify the socket filename for communication",        "/tmp/raspijpgs_socket", default_set, 0},
-    {"output",      "o",    RASPIJPGS_OUTPUT,       "Specify an output filename or '-' for stdout",         0,          default_set, 0},
+    {"output",      "o",    RASPIJPGS_OUTPUT,       "Specify an output filename or '-' for stdout",         "",         default_set, 0},
     {"count",       0,      RASPIJPGS_COUNT,        "How many frames to capture before quiting (-1 = no limit)", "-1",  default_set, count_apply},
     {"lockfile",    0,      RASPIJPGS_LOCKFILE,     "Specify a lock filename to prevent multiple runs",     "/tmp/raspijpgs_lock", default_set, 0},
 
@@ -418,6 +420,7 @@ static void apply_parameters(enum config_context context)
 {
     const struct raspi_config_opt *opt;
     for (opt = opts; opt->long_option; opt++) {
+  	warnx("apply %s", opt->long_option);
         if (opt->apply)
             opt->apply(opt, context);
     }
@@ -794,7 +797,6 @@ void start_all()
         if (mmal_port_send_buffer(state.jpegencoder->output[0], jpegbuffer) != MMAL_SUCCESS)
             errx(EXIT_FAILURE, "Could not send buffers to jpeg port");
     }
-
 #if 0
     //
     // settings
@@ -857,8 +859,13 @@ static void server_loop()
         int bytes_received = recvfrom(state.socket_fd,
                                       state.buffer, MAX_DATA_BUFFER_SIZE, 0,
                                       &from_addr, &from_addr_len);
-        if (bytes_received < 0)
+        if (bytes_received < 0) {
+            if (errno == EINTR)
+                continue;
+
             err(EXIT_FAILURE, "recvfrom");
+        }
+
         add_client(&from_addr);
 
         state.buffer[bytes_received] = 0;
@@ -937,8 +944,12 @@ static void client_loop()
         int bytes_received = recvfrom(state.socket_fd,
                                       state.buffer, MAX_DATA_BUFFER_SIZE, 0,
                                       &from_addr, &from_addr_len);
-        if (bytes_received < 0)
+        if (bytes_received < 0) {
+            if (errno == EINTR)
+                continue;
+
             err(EXIT_FAILURE, "recvfrom");
+        }
         if (from_addr.sun_family != state.server_addr.sun_family ||
             strcmp(from_addr.sun_path, state.server_addr.sun_path) != 0) {
             warnx("Dropping message from unexpected sender %s. Server should be %s",
