@@ -9,10 +9,10 @@ include_directories(${VC_DIR}/include/interface/vcos/pthreads)
 include_directories(${VC_DIR}/include/interface/vmcs_host/linux)
 link_directories(${VC_DIR}/lib)
 
-add_executable(raspimjpg RaspiMJPEG.c)
+add_executable(raspijpgs raspijpgs.c)
 
 set (MMAL_LIBS mmal_core mmal_util mmal_vc_client)
 
-target_link_libraries(raspimjpg ${MMAL_LIBS} vcos bcm_host)
+target_link_libraries(raspijpgs ${MMAL_LIBS} vcos bcm_host)
 
-install(TARGETS raspimjpg RUNTIME DESTINATION bin)
+install(TARGETS raspijpgs RUNTIME DESTINATION bin)
