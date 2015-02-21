@@ -720,7 +720,7 @@ void start_all()
     //
     // create jpeg-encoder
     //
-    status = mmal_component_create(MMAL_COMPONENT_DEFAULT_IMAGE_ENCODER, &state.jpegencoder);
+    MMAL_STATUS_T status = mmal_component_create(MMAL_COMPONENT_DEFAULT_IMAGE_ENCODER, &state.jpegencoder);
     if (status != MMAL_SUCCESS && status != MMAL_ENOSYS)
         errx(EXIT_FAILURE, "Could not create image encoder");
 
@@ -734,6 +734,8 @@ void start_all()
         state.jpegencoder->output[0]->buffer_num = state.jpegencoder->output[0]->buffer_num_min;
     if (mmal_port_format_commit(state.jpegencoder->output[0]) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set image format");
+
+    int quality = strtol(getenv(RASPIJPGS_QUALITY), 0, 0);
     if (mmal_port_parameter_set_uint32(state.jpegencoder->output[0], MMAL_PARAMETER_JPEG_Q_FACTOR, quality) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set jpeg quality");
 
@@ -746,6 +748,7 @@ void start_all()
     //
     // create image-resizer
     //
+    int width = strtol(getenv(RASPIJPGS_WIDTH), 0, 0);
     unsigned int height_temp = (unsigned long int)width*video_height/video_width;
     height_temp -= height_temp%16;
     status = mmal_component_create("vc.ril.resize", &state.resizer);
