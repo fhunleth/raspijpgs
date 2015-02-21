@@ -103,7 +103,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define RASPIJPGS_COUNT             "RASPIJPGS_COUNT"
 #define RASPIJPGS_LOCKFILE          "RASPIJPGS_LOCKFILE"
 
-
 // Globals
 
 enum config_context {
@@ -117,7 +116,6 @@ struct raspijpgs_state
     // Settings
     char *lock_filename;
     char *config_filename;
-    char *framing;
     char *setlist;
     int count;
 
@@ -135,6 +133,13 @@ struct raspijpgs_state
 
     struct sockaddr_un server_addr;
     struct sockaddr_un client_addrs[MAX_CLIENTS];
+
+    // Output
+    int no_output;
+    int output_fd;
+    char *output_filename;
+    char *output_tmp_filename;
+    char *framing;
 
     // MMAL resources
     MMAL_COMPONENT_T *camera;
@@ -167,6 +172,12 @@ struct raspi_config_opt
     void (*apply)(const struct raspi_config_opt *, enum config_context context);
 };
 static struct raspi_config_opt opts[];
+
+static const char *mime_header = "MIME-Version: 1.0\r\n" \
+                                 "content-type: multipart/x-mixed-replace;boundary=--jpegboundary\r\n";
+static const char *mime_boundary = "\r\n--jpegboundary\r\n";
+static const char *mime_multipart_header_format = "Content-Type: image/jpeg\r\n" \
+                                                  "Content-Length: %d\r\n\r\n";
 
 static void default_set(const struct raspi_config_opt *opt, const char *value, int replace)
 {
@@ -544,7 +555,6 @@ static void apply_parameters(enum config_context context)
 {
     const struct raspi_config_opt *opt;
     for (opt = opts; opt->long_option; opt++) {
-  	warnx("apply %s", opt->long_option);
         if (opt->apply)
             opt->apply(opt, context);
     }
@@ -757,6 +767,64 @@ static void camera_control_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
     mmal_buffer_header_release(buffer);
 }
 
+static void output_jpeg(char *buf, int len)
+{
+    if (state.no_output)
+        return;
+
+    if (strcmp(state.framing, "mime") == 0) {
+        char multipart_header[256];
+        int multipart_header_len =
+            sprintf(multipart_header, mime_multipart_header_format, len);
+
+        struct iovec iovs[3];
+        iovs[0].iov_base = multipart_header;
+        iovs[0].iov_len = multipart_header_len;
+        iovs[1].iov_base = buf;
+        iovs[1].iov_len = len;
+        iovs[2].iov_base = mime_boundary;
+        iovs[2].iov_len = strlen(mime_boundary);
+        int count = writev(state.output_fd, iovs, 3);
+        if (count < 0)
+            err(EXIT_FAILURE, "Error writing to %s", state.output_filename);
+        else if (count != len)
+            warnx("Unexpected truncation of JPEG when writing to %s", state.output_filename);
+    } else if (strcmp(state.framing, "header") == 0) {
+        struct iovec iovs[2];
+        int32_t len32 = len;
+        iovs[0].iov_base = &len32;
+        iovs[0].iov_len = sizeof(int32_t);
+        iovs[1].iov_base = buf;
+        iovs[1].iov_len = len;
+        int count = writev(state.output_fd, iovs, 2);
+        if (count < 0)
+            err(EXIT_FAILURE, "Error writing to %s", state.output_filename);
+        else if (count != len)
+            warnx("Unexpected truncation of JPEG when writing to %s", state.output_filename);
+    } else if (strcmp(state.framing, "replace") == 0) {
+        // replace the output file with the latest image
+        int fd = open(state.output_tmp_filename, O_WRONLY | O_CREAT | O_CLOEXEC);
+        if (fd < 0)
+            err(EXIT_FAILURE, "Can't create %s", state.output_tmp_filename);
+        int count = write(fd, buf, len);
+        if (count < 0)
+            err(EXIT_FAILURE, "Error writing to %s", state.output_tmp_filename);
+        else if (count != len)
+            warnx("Unexpected truncation of JPEG when writing to %s", state.output_tmp_filename);
+        close(fd);
+        if (rename(state.output_tmp_filename, state.output_filename) < 0)
+            err(EXIT_FAILURE, "Can't rename %s to %s", state.output_tmp_filename, state.output_filename);
+    } else {
+        // cat (aka concatenate)
+        // TODO - Loop to make sure that everything is written.
+        int count = write(state.output_fd, buf, len);
+        if (count < 0)
+            err(EXIT_FAILURE, "Error writing to %s", state.output_filename);
+        else if (count != len)
+            warnx("Unexpected truncation of JPEG when writing to %s", state.output_filename);
+    }
+}
+
 static void distribute_jpeg(char *buf, int len)
 {
     printf("got %d", len);
@@ -960,28 +1028,6 @@ void start_all()
         if (mmal_port_send_buffer(state.jpegencoder->output[0], jpegbuffer) != MMAL_SUCCESS)
             errx(EXIT_FAILURE, "Could not send buffers to jpeg port");
     }
-#if 0
-    //
-    // settings
-    //
-    cam_set_sharpness();
-    cam_set_contrast();
-    cam_set_brightness();
-    cam_set_saturation();
-    cam_set_iso();
-    cam_set_vs();
-    cam_set_ec();
-    cam_set_em();
-    cam_set_wb();
-    cam_set_mm();
-    cam_set_ie();
-    cam_set_ce();
-    cam_set_rotation();
-    cam_set_flip();
-    cam_set_roi();
-    cam_set_ss();
-    cam_set_annotation();
-#endif
 }
 
 void stop_all()
@@ -1086,10 +1132,17 @@ static void cleanup_client()
     unlink(state.client_addrs[0].sun_path);
 }
 
+static void emit_mime_header()
+{
+    if (state.no_output)
+        return;
+
+    write(state.output_fd, mime_header, strlen(mime_header));
+}
+
 static void client_loop()
 {
-    if (!getenv(RASPIJPGS_OUTPUT)) {
-	printf("no output\n");
+    if (state.no_output) {
         // If no output, force the number of jpegs to capture to be 0 (no place to store them)
         setenv(RASPIJPGS_COUNT, "0", 1);
 
@@ -1158,9 +1211,43 @@ int main(int argc, char* argv[])
     if (state.user_wants_client && state.user_wants_server)
         errx(EXIT_FAILURE, "Both --client and --server requested");
 
+    // Allocate buffers
     state.buffer = (char *) malloc(MAX_DATA_BUFFER_SIZE);
     if (!state.buffer)
         err(EXIT_FAILURE, "malloc");
+
+    // Create output files if any
+    state.output_filename = getenv(RASPIJPGS_OUTPUT);
+    if (strcmp(state.output_filename, "-") == 0) {
+        // stdout
+        state.output_fd = STDOUT_FILENO;
+
+        if (strcmp(state.framing, "replace") == 0)
+            errx(EXIT_FAILURE, "Cannot use 'replace' framing with stdout");
+    } else if (strlen(state.output_filename) > 0) {
+        if (strcmp(state.framing, "replace") == 0) {
+            // With 'replace' framing, we create a new file every time and
+            // rename it to the output file.
+            asprintf(state.output_tmp_filename, "%s.tmp", output_filename);
+            state.output_fd = -1;
+        } else {
+            // For all other framing, we can open the file once
+            state.output_fd = open(output_filename, O_WRONLY | O_CREAT | O_CLOEXEC);
+            if (state.output_fd < 0)
+                err(EXIT_FAILURE, "Can't create %s", output_filename);
+        }
+        state.output_fd = open(output_filename, O)
+    } else {
+        // No output, so make sure that we don't even try.
+        state.output_fd = -1;
+        state.no_output = 1;
+    }
+
+    // Emit the MIME header if in mime framing mode
+    if (!state.no_output &&
+            strcmp(state.framing, "mime") == 0 &&
+            write(state.output_fd, mime_header, strlen(mime_header)) < 0)
+        err(EXIT_FAILURE, "Error writing to %s", state.output_filename);
 
     // Capture SIGINT and SIGTERM so that we exit gracefully
     struct sigaction action = {0};
@@ -1188,5 +1275,8 @@ int main(int argc, char* argv[])
         client_loop();
 
     free(state.buffer);
+    if (state.output_fd >= 0 && state.output_fd != STDOUT_FILENO)
+        close(state.output_fd);
+
     exit(EXIT_SUCCESS);
 }
