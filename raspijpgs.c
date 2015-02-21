@@ -387,12 +387,12 @@ static void colfx_apply(const struct raspi_config_opt *opt, enum config_context 
     // Color effect is specified as u:v. Anything else means off.
     MMAL_PARAMETER_COLOURFX_T param = {{MMAL_PARAMETER_COLOUR_EFFECT,sizeof(param)}, 0, 0, 0};
     const char *str = getenv(opt->env_key);
-    if (sscanf(str, "%d:%d", &params.u, &params.v) == 2 &&
-            params.u < 256 &&
-            params.v < 256)
-        params.enable = 1;
+    if (sscanf(str, "%d:%d", &param.u, &param.v) == 2 &&
+            param.u < 256 &&
+            param.v < 256)
+        param.enable = 1;
     else
-        params.enable = 0;
+        param.enable = 0;
     if (mmal_port_parameter_set(state.camera->control, &param.hdr) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
 }
@@ -751,10 +751,16 @@ static void camera_control_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
     mmal_buffer_header_release(buffer);
 }
 
+#include <sys/syscall.h>
+static int gettid()
+{
+	return syscall(SYS_gettid);
+}
+
 static void distribute_jpeg(char *buf, int len)
 {
 
-    printf("got %d; pid=%d\n", len, getpid());
+    printf("got %d; pid=%d,%d\n", len, getpid(), gettid());
 }
 
 static void jpegencoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
@@ -970,7 +976,7 @@ static void server_loop()
         err(EXIT_FAILURE, "Can't create Unix Domain socket at %s", state.server_addr.sun_path);
     atexit(cleanup_server);
 
-    printf("server started in pid %d\n", getpid());
+    printf("server started in pid %d, tid %d\n", getpid(), gettid());
 
     // Main loop - keep going until we don't want any more JPEGs.
     while (state.count != 0) {
