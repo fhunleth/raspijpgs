@@ -31,6 +31,7 @@ travis:
 
 install:
 	install -m 755 -D raspijpgs $(INSTALL_PREFIX)/bin/raspijpgs
+	strip $(INSTALL_PREFIX)/bin/raspijpgs
 
 clean:
 	rm -f $(OBJS) raspijpgs
