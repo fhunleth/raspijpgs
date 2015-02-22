@@ -4,10 +4,14 @@
 
 Simple commandline driven MotionJPEG streamer for the Raspberry Pi
 
-See
-https://github.com/silvanmelchior/userland/tree/master/host_applications/linux/apps/raspicam
+See [Silvan Melchior's branch of the Raspberry Pi userland project](https://github.com/silvanmelchior/userland/tree/master/host_applications/linux/apps/raspicam)
 for `raspimjpeg` and `raspistill` which are programs that I wish that I could have
-used. This one is based on raspimjpeg.
+used. This one copies a little more code from `raspimjpeg`.
+
+NOTE: Many, but not all of the `raspistill` camera configuration options have
+been implemented. Each one is pretty easy to add, so if you find one that's not
+implemented, please consider adding it and sending a pull request. I'll get
+to all of the eventually!
 
 ## Installation and Demo
 
