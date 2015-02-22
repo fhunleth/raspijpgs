@@ -29,7 +29,7 @@ The following demo runs a Python webserver to stream video from the Pi Camera:
     cd pyserver
     ./run.sh
 
-Open a browser up on a PC and point it to http://you.pi.ip.address:8000/.
+Open a browser up on a PC and point it to http://your.pi.ip.address:8000/.
 
 `raspijpgs` takes many of the same options as `raspistill`. You can modify the camera's
 settings on the fly by using the `--send` option. For example:
@@ -44,14 +44,16 @@ settings on the fly by using the `--send` option. For example:
 
     raspijpgs --send imxfx=none
 
+More than one --send option can be specified at a time.
+
 While the server is running, you can capture an image to a file at any time. Do this
 while streaming to a web browser to see that it doesn't interrupt the stream. On the
 Raspberry Pi, run:
 
     raspijpgs --count 1 --output test.jpg
 
-More than one --send option can be specified at a time. When you're done, you can either
-kill the server process or tell it to quit:
+When you're done, stop the Python webserver. Then, you can either kill the `raspijpgs`
+server process or tell it to quit:
 
     raspijpgs --send quit
 
@@ -83,7 +85,7 @@ which have precedence over the configuration file. Each way of specifying a conf
 has it's own use. For the most part, commandline arguments and configuration files are
 the way to go. However, sometimes it is inconvenient to access those arguments since
 `raspijpgs` is being used deep in some other program. In this case, using environment
-variables is a good way of passing configuration down. (E.g., you may want to set the 
+variables is a good way of passing configuration down. (E.g., you may want to set the
 camera to have a cartoon image effect, so you set RASPIJPGS_IMXFX=cartoon in the
 environment.
 
@@ -95,7 +97,7 @@ the commandline option names without the "--" part. For example,
     brightness=40
     saturation=-10
 
-`raspijpgs` uses many of the same commandline arguments as `raspistill`. The following 
+`raspijpgs` uses many of the same commandline arguments as `raspistill`. The following
 table summarizes the options:
 
 Option          | Environment Var | Description
