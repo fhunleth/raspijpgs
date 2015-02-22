@@ -1,23 +1,52 @@
 # raspijpgs
 
-Dirt simple MotionJPEG streamer for the Raspberry Pi
+Simple commandline driven MotionJPEG streamer for the Raspberry Pi
 
 See
 https://github.com/silvanmelchior/userland/tree/master/host_applications/linux/apps/raspicam
 for `raspimjpeg` and `raspistill` which are programs that I wish that I could have
 used. This one is based on raspimjpeg.
 
-## Installation
+## Installation and Demo
 
-If you're using Raspian, run the following:
+Run the following on the Raspberry Pi:
 
+    # Assumes Raspian - modify accordingly
     sudo apt-get install cmake
+
+    git clone https://github.com/fhunleth/raspimjpg.git
+    cd raspimjpg
     cmake .
     make
     sudo make install
 
+The following demo runs a Python webserver to stream video from the Pi Camera:
 
-## Examples
+    # Start the raspijpgs server
+    ./raspijpgs &
+
+    # Start up the python web server - python will call raspijpgs via a cgi script
+    cd pyserver
+    ./run.sh
+
+Open a browser up on a PC and point it to http://you.pi.ip.address:8000/.
+
+`raspijpgs` takes many of the same options as `raspistill`. You can modify the camera's
+settings on the fly by using the `--set` option. For example:
+
+    # Flip video
+    ./raspijpgs --set vflip=on
+
+    # Add some image effects
+    ./raspijpgs --set imxfx=sketch
+
+More than one --set option can be specified at a time. When you're done, you can either
+kill the server or tell it to quit:
+
+    ./raspijpgs --set quit
+
+## More Examples
+
 
 
 ## Client/Server Protocol
