@@ -1,6 +1,6 @@
 # raspijpgs
 
-[![Build Status](https://travis-ci.org/fhunleth/raspijpgs.svg?branch=master)](https://travis-ci.org/fhunleth/raspijpgs)
+[![Build Status](https://travis-ci.org/fhunleth/raspijpgs.svg?branch=master)](https://travis-ci.org/fhunleth/raspijpgs) [![Coverity Scan Build Status](https://scan.coverity.com/projects/4338/badge.svg)](https://scan.coverity.com/projects/4338)
 
 Simple commandline driven MotionJPEG streamer for the Raspberry Pi
 

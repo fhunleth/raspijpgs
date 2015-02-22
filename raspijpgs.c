@@ -231,7 +231,8 @@ static void send_set(const struct raspi_config_opt *opt, const char *value, int 
 
     if (state.sendlist) {
         char *old_sendlist = state.sendlist;
-        asprintf(&state.sendlist, "%s\n%s", old_sendlist, value);
+        if (asprintf(&state.sendlist, "%s\n%s", old_sendlist, value) < 0)
+            err(EXIT_FAILURE, "asprintf");
         free(old_sendlist);
     } else
         state.sendlist = strdup(value);
@@ -993,7 +994,7 @@ void start_all()
 
     if (mmal_port_parameter_set_boolean(state.jpegencoder->output[0], MMAL_PARAMETER_EXIF_DISABLE, 1) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not turn off EXIF");
-       
+
     if (mmal_component_enable(state.jpegencoder) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not enable image encoder");
     state.pool_jpegencoder = mmal_port_pool_create(state.jpegencoder->output[0], state.jpegencoder->output[0]->buffer_num, state.jpegencoder->output[0]->buffer_size);
@@ -1206,7 +1207,7 @@ static void client_loop()
                   state.server_addr.sun_path);
             continue;
         }
-	
+
 	output_jpeg(state.buffer, bytes_received);
         if (state.count > 0)
             state.count--;
@@ -1214,7 +1215,7 @@ static void client_loop()
 }
 
 int main(int argc, char* argv[])
-{    
+{
     // Parse commandline and config file arguments
     parse_args(argc, argv);
     load_config_file();
@@ -1242,7 +1243,9 @@ int main(int argc, char* argv[])
         if (strcmp(state.framing, "replace") == 0) {
             // With 'replace' framing, we create a new file every time and
             // rename it to the output file.
-            asprintf(&state.output_tmp_filename, "%s.tmp", state.output_filename);
+            if (asprintf(&state.output_tmp_filename, "%s.tmp", state.output_filename) < 0)
+                err(EXIT_FAILURE, "asprintf");
+
             state.output_fd = -1;
         } else {
             // For all other framing, we can open the file once
@@ -1257,7 +1260,7 @@ int main(int argc, char* argv[])
     }
 
     // Emit the MIME header if in mime framing mode
-    if (!state.no_output &&
+    if (state.output_fd >= 0 &&
             strcmp(state.framing, "mime") == 0 &&
             (write(state.output_fd, mime_header, strlen(mime_header)) < 0 ||
              write(state.output_fd, mime_boundary, strlen(mime_boundary)) < 0))
@@ -1282,7 +1285,8 @@ int main(int argc, char* argv[])
         err(EXIT_FAILURE, "socket");
 
     state.server_addr.sun_family = AF_UNIX;
-    strcpy(state.server_addr.sun_path, getenv(RASPIJPGS_SOCKET));
+    strncpy(state.server_addr.sun_path, getenv(RASPIJPGS_SOCKET), sizeof(state.server_addr.sun_path) - 1);
+    state.server_addr.sun_path[sizeof(state.server_addr.sun_path) - 1] = '\0';
 
     if (state.is_server)
         server_loop();
