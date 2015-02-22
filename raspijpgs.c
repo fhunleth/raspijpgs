@@ -612,7 +612,8 @@ static void parse_args(int argc, char *argv[])
             help(0, 0, 0);
         }
 
-        opt->set(opt, value, 1); // "replace" -> commandline args have highest precedence
+        if (opt)
+            opt->set(opt, value, 1); // "replace" -> commandline args have highest precedence
     }
 }
 
@@ -953,7 +954,8 @@ void start_all()
         .fast_preview_resume = 0,
         .use_stc_timestamp = MMAL_PARAM_TIMESTAMP_MODE_RESET_STC
     };
-    mmal_port_parameter_set(state.camera->control, &cam_config.hdr);
+    if (mmal_port_parameter_set(state.camera->control, &cam_config.hdr) != MMAL_SUCCESS)
+        errx(EXIT_FAILURE, "Error configuring camera");
 
     MMAL_ES_FORMAT_T *format = state.camera->output[0]->format;
     format->es->video.width = video_width;
@@ -965,7 +967,7 @@ void start_all()
     format->es->video.frame_rate.num = 0;
     format->es->video.frame_rate.den = 1;
     if (mmal_port_format_commit(state.camera->output[0]) != MMAL_SUCCESS)
-        errx(EXIT_FAILURE, "Coult not set preview format");
+        errx(EXIT_FAILURE, "Could not set preview format");
 
     if (mmal_component_enable(state.camera) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not enable camera");
