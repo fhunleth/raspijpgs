@@ -837,20 +837,19 @@ static void output_jpeg(char *buf, int len)
 
 static void distribute_jpeg(char *buf, int len)
 {
-    printf("got %d", len);
     // Send the JPEG to all of our clients
     int j;
     for (j = 0; j < MAX_CLIENTS; j++) {
         if (state.client_addrs[j].sun_family) {
-printf(".");
             if (sendto(state.socket_fd, buf, len, 0, &state.client_addrs[j], sizeof(struct sockaddr_un)) < 0) {
                 // If failure, then remove client.
                 state.client_addrs[j].sun_family = 0;
             }
         }
     }
-printf("\n");
+
     // Handle it ourselves
+    output_jpeg(buf, len);
 }
 
 static void recycle_jpegencoder_buffer(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buffer)
@@ -1074,8 +1073,6 @@ static void server_service_client()
     add_client(&from_addr);
 
     state.buffer[bytes_received] = 0;
-    printf("Got %d bytes from client\n", bytes_received);
-    printf("'%s'\n", state.buffer);
     char *line = state.buffer;
     char *line_end;
     do {
