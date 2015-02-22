@@ -116,7 +116,7 @@ struct raspijpgs_state
     // Settings
     char *lock_filename;
     char *config_filename;
-    char *setlist;
+    char *sendlist;
     int count;
 
     // Commandline options to only run in client or server mode
@@ -212,12 +212,12 @@ static void framing_set(const struct raspi_config_opt *opt, const char *value, i
     UNUSED(opt); UNUSED(replace);
     setstring(&state.framing, value);
 }
-static void set_set(const struct raspi_config_opt *opt, const char *value, int replace)
+static void send_set(const struct raspi_config_opt *opt, const char *value, int replace)
 {
     UNUSED(opt);
     UNUSED(replace);
 
-    // Set lists are intended to look like config files for ease of parsing
+    // Send lists are intended to look like config files for ease of parsing
     const char *equals = strchr(value, '=');
     char *key = equals ? strndup(value, equals - value) : strdup(value);
     const struct raspi_config_opt *o;
@@ -229,12 +229,12 @@ static void set_set(const struct raspi_config_opt *opt, const char *value, int r
         errx(EXIT_FAILURE, "Unexpected key '%s' used in --set. Check help", key);
     free(key);
 
-    if (state.setlist) {
-        char *old_setlist = state.setlist;
-        asprintf(&state.setlist, "%s\n%s", old_setlist, value);
-        free(old_setlist);
+    if (state.sendlist) {
+        char *old_sendlist = state.sendlist;
+        asprintf(&state.sendlist, "%s\n%s", old_sendlist, value);
+        free(old_sendlist);
     } else
-        state.setlist = strdup(value);
+        state.sendlist = strdup(value);
 }
 static void quit_set(const struct raspi_config_opt *opt, const char *value, int replace)
 {
@@ -482,7 +482,7 @@ static struct raspi_config_opt opts[] =
 {
     // long_option  short   env_key                  help                                                    default
     {"width",       "w",    RASPIJPGS_WIDTH,        "Set image width <size>",                               "320",      default_set, width_apply},
-    {"annotation",  "a",    RASPIJPGS_ANNOTATION,   "Annotation on the video frames",                       "",         default_set, annotation_apply},
+    {"annotation",  "a",    RASPIJPGS_ANNOTATION,   "Annotate the video frames with this text",             "",         default_set, annotation_apply},
     {"anno_background", "ab", RASPIJPGS_ANNO_BACKGROUND, "Turn on a black background behind the annotation", "off",     default_set, anno_background_apply},
     {"sharpness",   "sh",   RASPIJPGS_SHARPNESS,    "Set image sharpness (-100 to 100)",                    "0",        default_set, sharpness_apply},
     {"contrast",    "co",   RASPIJPGS_CONTRAST,     "Set image contrast (-100 to 100)",                     "0",        default_set, contrast_apply},
@@ -510,7 +510,7 @@ static struct raspi_config_opt opts[] =
     // options that can't be overridden using environment variables
     {"config",      "c",    0,                       "Specify a config file to read for options",            0,          config_set, 0},
     {"framing",     "fr",   0,                       "Specify the output framing (cat, mime, header, replace)", "cat",   framing_set, 0},
-    {"set",         0,      0,                       "Set this parameter on the server (e.g. --set shutter=1000)", 0,    set_set, 0},
+    {"send",        0,      0,                       "Send this parameter on the server (e.g. --send shutter=1000)", 0,  send_set, 0},
     {"server",      0,      0,                       "Run as a server",                                      0,          server_set, 0},
     {"client",      0,      0,                       "Run as a client",                                      0,          client_set, 0},
     {"quit",        0,      0,                       "Tell a server to quit",                                0,          quit_set, 0},
@@ -680,6 +680,10 @@ static void parse_config_line(const char *line, enum config_context context)
         if (opt->apply)
             opt->apply(opt, context);
         break;
+
+    default:
+        // Ignore
+        break;
     }
     free(str);
 }
@@ -782,7 +786,7 @@ static void camera_control_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
     mmal_buffer_header_release(buffer);
 }
 
-static void output_jpeg(char *buf, int len)
+static void output_jpeg(const char *buf, int len)
 {
     if (state.no_output)
         return;
@@ -795,7 +799,7 @@ static void output_jpeg(char *buf, int len)
         struct iovec iovs[3];
         iovs[0].iov_base = multipart_header;
         iovs[0].iov_len = multipart_header_len;
-        iovs[1].iov_base = buf;
+        iovs[1].iov_base = (char *) buf; // silence warning
         iovs[1].iov_len = len;
         iovs[2].iov_base = (char *) mime_boundary; // silence warning
         iovs[2].iov_len = strlen(mime_boundary);
@@ -809,7 +813,7 @@ static void output_jpeg(char *buf, int len)
         int32_t len32 = len;
         iovs[0].iov_base = &len32;
         iovs[0].iov_len = sizeof(int32_t);
-        iovs[1].iov_base = buf;
+        iovs[1].iov_base = (char *) buf; // silence warning
         iovs[1].iov_len = len;
         int count = writev(state.output_fd, iovs, 2);
         if (count < 0)
@@ -840,15 +844,15 @@ static void output_jpeg(char *buf, int len)
     }
 }
 
-static void distribute_jpeg(char *buf, int len)
+static void distribute_jpeg(const char *buf, size_t len)
 {
     // Send the JPEG to all of our clients
-    int j;
-    for (j = 0; j < MAX_CLIENTS; j++) {
-        if (state.client_addrs[j].sun_family) {
-            if (sendto(state.socket_fd, buf, len, 0, &state.client_addrs[j], sizeof(struct sockaddr_un)) < 0) {
+    size_t i;
+    for (i = 0; i < MAX_CLIENTS; i++) {
+        if (state.client_addrs[i].sun_family) {
+            if (sendto(state.socket_fd, buf, len, 0, &state.client_addrs[i], sizeof(struct sockaddr_un)) < 0) {
                 // If failure, then remove client.
-                state.client_addrs[j].sun_family = 0;
+                state.client_addrs[i].sun_family = 0;
             }
         }
     }
@@ -885,7 +889,7 @@ static void jpegencoder_buffer_callback_impl()
             (buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END) &&
             buffer->length <= MAX_DATA_BUFFER_SIZE) {
         // Easy case: JPEG all in one buffer
-        distribute_jpeg(buffer->data, buffer->length);
+        distribute_jpeg((const char *) buffer->data, buffer->length);
     } else {
         // Hard case: assemble JPEG
         if (state.buffer_ix + buffer->length > MAX_DATA_BUFFER_SIZE) {
@@ -1097,8 +1101,8 @@ static void server_service_mmal()
 static void server_loop()
 {
     // Check if the user meant to run as a client and the server is dead
-    if (state.setlist)
-        errx(EXIT_FAILURE, "Trying to run a set operation, but a raspijpgs server isn't running.");
+    if (state.sendlist)
+        errx(EXIT_FAILURE, "Trying to send a message to a raspijpgs server, but one isn't running.");
 
     // Init hardware
     bcm_host_init();
@@ -1154,9 +1158,9 @@ static void client_loop()
         // If no output, force the number of jpegs to capture to be 0 (no place to store them)
         setenv(RASPIJPGS_COUNT, "0", 1);
 
-        if (!state.setlist)
-            errx(EXIT_FAILURE, "No sets and no place to store output, so nothing to do.\n"
-                               "If you meant to run as a server, there's one already running.");
+        if (!state.sendlist)
+            errx(EXIT_FAILURE, "No sends and no place to store output, so nothing to do.\n"
+                               "If you meant to start a server, there's one already running.");
     }
     // Apply client only options - FIXME
     state.count = strtol(getenv(RASPIJPGS_COUNT), NULL, 0);
@@ -1169,13 +1173,13 @@ static void client_loop()
         err(EXIT_FAILURE, "Can't create Unix Domain socket at %s", state.client_addrs[0].sun_path);
     atexit(cleanup_client);
 
-    // Send our "sets" to the server or an empty string to make
+    // Send our requests to the server or an empty string to make
     // contact with the server so that it knows about us.
-    const char *setlist = state.setlist;
-    if (!setlist)
-        setlist = "";
-    int tosend = strlen(setlist);
-    int sent = sendto(state.socket_fd, setlist, tosend, 0,
+    const char *sendlist = state.sendlist;
+    if (!sendlist)
+        sendlist = "";
+    int tosend = strlen(sendlist);
+    int sent = sendto(state.socket_fd, sendlist, tosend, 0,
                       (struct sockaddr *) &state.server_addr,
                       sizeof(struct sockaddr_un));
     if (sent != tosend)
@@ -1260,7 +1264,8 @@ int main(int argc, char* argv[])
         err(EXIT_FAILURE, "Error writing to %s", state.output_filename);
 
     // Capture SIGINT and SIGTERM so that we exit gracefully
-    struct sigaction action = {0};
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
     action.sa_handler = term_sighandler;
     sigaction(SIGTERM, &action, NULL);
     sigaction(SIGINT, &action, NULL);

@@ -14,8 +14,8 @@ Run the following on the Raspberry Pi:
     # Assumes Raspian - modify accordingly
     sudo apt-get install cmake
 
-    git clone https://github.com/fhunleth/raspimjpg.git
-    cd raspimjpg
+    git clone https://github.com/fhunleth/raspijpgs.git
+    cd raspijpgs
     cmake .
     make
     sudo make install
@@ -23,7 +23,7 @@ Run the following on the Raspberry Pi:
 The following demo runs a Python webserver to stream video from the Pi Camera:
 
     # Start the raspijpgs server
-    ./raspijpgs &
+    raspijpgs &
 
     # Start up the python web server - python will call raspijpgs via a cgi script
     cd pyserver
@@ -32,28 +32,28 @@ The following demo runs a Python webserver to stream video from the Pi Camera:
 Open a browser up on a PC and point it to http://you.pi.ip.address:8000/.
 
 `raspijpgs` takes many of the same options as `raspistill`. You can modify the camera's
-settings on the fly by using the `--set` option. For example:
+settings on the fly by using the `--send` option. For example:
 
     # Flip video
-    ./raspijpgs --set vflip=on
+    raspijpgs --send vflip=on
 
     # Experiment with image effects
-    ./raspijpgs --set imxfx=sketch
+    raspijpgs --send imxfx=sketch
 
-    ./raspijpgs --set imxfx=cartoon
+    raspijpgs --send imxfx=cartoon
 
-    ./raspijpgs --set imxfx=none
+    raspijpgs --send imxfx=none
 
 While the server is running, you can capture an image to a file at any time. Do this
 while streaming to a web browser to see that it doesn't interrupt the stream. On the
 Raspberry Pi, run:
 
-    ./raspijpgs --count 1 --output test.jpg
+    raspijpgs --count 1 --output test.jpg
 
-More than one --set option can be specified at a time. When you're done, you can either
-kill the server or tell it to quit:
+More than one --send option can be specified at a time. When you're done, you can either
+kill the server process or tell it to quit:
 
-    ./raspijpgs --set quit
+    raspijpgs --send quit
 
 ## MotionJPEG Framing
 
@@ -75,6 +75,63 @@ in the native endian (e.g., little endian on the Raspberry Pi.)
 Framing is specified on the invocation of `raspijpgs`, so you can have different
 framing options running at the same time.
 
+## Configuration
+
+Configuration can be specified using configuration file, environment variables, or via
+commandline arguments. Commandline arguments have precedence over environment variables
+which have precedence over the configuration file. Each way of specifying a configuration
+has it's own use. For the most part, commandline arguments and configuration files are
+the way to go. However, sometimes it is inconvenient to access those arguments since
+`raspijpgs` is being used deep in some other program. In this case, using environment
+variables is a good way of passing configuration down. (E.g., you may want to set the 
+camera to have a cartoon image effect, so you set RASPIJPGS_IMXFX=cartoon in the
+environment.
+
+A configuration file is just a list of `key=value` pairs and comments. The keys are
+the commandline option names without the "--" part. For example,
+
+    # configuration the camera like we want
+    contrast=20
+    brightness=40
+    saturation=-10
+
+`raspijpgs` uses many of the same commandline arguments as `raspistill`. The following 
+table summarizes the options:
+
+Option          | Environment Var | Description
+----------------|-----------------|------------
+width           | RASPIJPG_WIDTH | Set the image width
+annotation      | RASPIJPG_ANNOTATION | Annotate the video frames with this text
+anno_background | RASPIJPG_ANNO_BACKGROUND | Enable a black background behind the annotated text
+sharpness       | RASPIJPG_SHARPNESS | 	 Set image sharpness (-100 to 100)
+contrast        | RASPIJPG_CONTRAST | 	 Set image contrast (-100 to 100)
+brightness      | RASPIJPG_BRIGHTNESS |  Set image brightness (0 to 100)
+saturation      | RASPIJPG_SATURATION |  Set image saturation (-100 to 100)
+ISO             | RASPIJPG_ISO | 	 Set capture ISO (100 to 800)
+vstab           | RASPIJPG_VSTAB | 	 Turn on video stabilisation
+ev              | RASPIJPG_EV | 	 Set EV compensation (-10 to 10)
+exposure        | RASPIJPG_EXPOSURE | 	 Set exposure mode
+awb             | RASPIJPG_AWB | 	 Set Automatic White Balance (AWB) mode
+imxfx           | RASPIJPG_IMXFX | 	 Set image effect
+colfx           | RASPIJPG_COLFX | 	 Set colour effect <U:V>
+metering        | RASPIJPG_METERING | 	 Set metering mode
+rotation        | RASPIJPG_ROTATION | 	 Set image rotation (0-359)
+hflip           | RASPIJPG_HFLIP | 	 Set horizontal flip
+vflip           | RASPIJPG_VFLIP | 	 Set vertical flip
+roi             | RASPIJPG_ROI | 	 Set sensor region of interest
+shutter         | RASPIJPG_SHUTTER | 	 Set shutter speed
+quality         | RASPIJPG_QUALITY | 	 Set the JPEG quality (0-100)
+socket          | RASPIJPG_SOCKET | 	 Specify the socket filename for communication
+output          | RASPIJPG_OUTPUT | 	 Specify an output filename or '-' for stdout
+count           | RASPIJPG_COUNT |      	 How many frames to capture before quiting (-1 = no limit)
+lockfile        | RASPIJPG_LOCKFILE |      	 Specify a lock filename to prevent multiple runs
+config          | | 	 Specify a config file to read for options
+framing         | | 	 Specify the output framing (cat, mime, header, replace)
+send            | |      	 Set this parameter on the server (e.g. --set shutter=1000)
+server          | |      	 Run as a server
+client          | |      	 Run as a client
+quit            | |      	 Tell a server to quit
+help            | | 	 Print a help message
 
 
 ## Client/Server Protocol
