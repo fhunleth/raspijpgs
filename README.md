@@ -37,15 +37,43 @@ settings on the fly by using the `--set` option. For example:
     # Flip video
     ./raspijpgs --set vflip=on
 
-    # Add some image effects
+    # Experiment with image effects
     ./raspijpgs --set imxfx=sketch
+
+    ./raspijpgs --set imxfx=cartoon
+
+    ./raspijpgs --set imxfx=none
+
+While the server is running, you can capture an image to a file at any time. Do this
+while streaming to a web browser to see that it doesn't interrupt the stream. On the
+Raspberry Pi, run:
+
+    ./raspijpgs --count 1 --output test.jpg
 
 More than one --set option can be specified at a time. When you're done, you can either
 kill the server or tell it to quit:
 
     ./raspijpgs --set quit
 
-## More Examples
+## MotionJPEG Framing
+
+By default, `raspijpgs` concatenates each JPEG image to make one big file.
+Other options are available, though. Here's the list:
+
+  1. `cat` - concatenate each frame together
+  2. `replace` - save each frame to a file. Each frame replaces the contents of the previous file.
+  3. `mime` - output a multipart MIME stream with each JPEG in its own part
+  4. `header` - output the number of bytes in the JPEG and then the JPEG
+
+The `replace` option makes `raspijpgs` work similar to `raspimjpeg` and `raspistill`. Many
+programs that serve Motion JPEG streams expect this kind of operation. The `mime` option
+makes it possible to run `raspijpgs` in a CGI script so that you can stream the browser
+without additional smarts. The `header` option is convenient if you're writing your own
+program to send the JPEGs. The byte count for the `header` option is 4 bytes and stored
+in the native endian (e.g., little endian on the Raspberry Pi.)
+
+Framing is specified on the invocation of `raspijpgs`, so you can have different
+framing options running at the same time.
 
 
 
