@@ -3,7 +3,23 @@ language: c
 compiler:
     - gcc
 
-script:
-    - git clone --depth=1 git@github.com:raspberrypi/userland.git
-    - VC_DIR=userland/ make raspijpgs.o
+env:
+      global:
+             # The next declaration is the encrypted COVERITY_SCAN_TOKEN, created
+             #   via the "travis encrypt" command using the project repo's public key
+             - secure: "Lzs54Yv8FJwia6rM5HC45xRHOIkSdk96IuaTOokoicdS4RTqvHjoM/xvIZ+5/efFwPrCoLCuHMkm3OVdLLlE6LmfttsyeKs3pBQr8nEvFsBB68tyeLTH96qOrgvBvYRks2FZLo1pkLOlgVrl3CYSy+0emOtDwpmDnGf41Q/7+YU="
 
+before_install:
+    - git clone --depth=1 git@github.com:raspberrypi/userland.git
+
+script:
+    - INCLUDES="-Iuserland/host_applications/linux/libs/bcm_host/include -Iuserland -Iuserland/interface/vcos/pthreads -Iuserland/interface/vmcs_host/linux" make raspijpgs.o
+
+addons:
+      coverity_scan:
+             project:
+                name: "fhunleth/raspijpgs"
+                description: ""
+             notification_email: fhunleth@troodon-software.com
+             build_command: "INCLUDES=\"-Iuserland/host_applications/linux/libs/bcm_host/include -Iuserland -Iuserland/interface/vcos/pthreads -Iuserland/interface/vmcs_host/linux\" make raspijpgs.o"
+             branch_pattern: coverity_scan
