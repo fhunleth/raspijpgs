@@ -10,7 +10,7 @@ env:
              - secure: "Lzs54Yv8FJwia6rM5HC45xRHOIkSdk96IuaTOokoicdS4RTqvHjoM/xvIZ+5/efFwPrCoLCuHMkm3OVdLLlE6LmfttsyeKs3pBQr8nEvFsBB68tyeLTH96qOrgvBvYRks2FZLo1pkLOlgVrl3CYSy+0emOtDwpmDnGf41Q/7+YU="
 
 before_install:
-    - git clone --depth=1 git@github.com:raspberrypi/userland.git
+    - git clone --depth=1 https://github.com/raspberrypi/userland.git
 
 script:
     - INCLUDES="-Iuserland/host_applications/linux/libs/bcm_host/include -Iuserland -Iuserland/interface/vcos/pthreads -Iuserland/interface/vmcs_host/linux" make raspijpgs.o
