@@ -20,6 +20,15 @@ raspijpgs: $(OBJS)
 $(OBJS): %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
+# This build target is just for travis-ci so that we can check for warnings and
+# compilation errors automatically. In the coverity branch, this will also run
+# static analysis.
+travis:
+	if [ ! -e userland ]; then \
+	    git clone --depth=1 https://github.com/raspberrypi/userland.git; \
+	fi
+	INCLUDES="-Iuserland/host_applications/linux/libs/bcm_host/include -Iuserland -Iuserland/interface/vcos/pthreads -Iuserland/interface/vmcs_host/linux" $(MAKE) raspijpgs.o
+
 install:
 	install -m 755 -D raspijpgs $(INSTALL_PREFIX)/bin/raspijpgs
 

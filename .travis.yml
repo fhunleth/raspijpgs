@@ -9,11 +9,8 @@ env:
              #   via the "travis encrypt" command using the project repo's public key
              - secure: "UpJC7Dxd1LIjHficC8e4X2PRswfFCmq1mWeDBnY1CXDzHRDxTYJ+TPznAPzdzuj538yWObIrYwD8AQvg3zhwcDLM3tVoVOBBtkl24B8fI+ugGV94BMGHU4urWmUYOhjvCC23T2t1z+OwTrgv4QVcpO1YGLbYTC9Mkp/3MANaBf4="
 
-before_install:
-    - git clone --depth=1 https://github.com/raspberrypi/userland.git
-
 script:
-    - INCLUDES="-Iuserland/host_applications/linux/libs/bcm_host/include -Iuserland -Iuserland/interface/vcos/pthreads -Iuserland/interface/vmcs_host/linux" make raspijpgs.o
+    - make travis
 
 addons:
       coverity_scan:
@@ -21,5 +18,5 @@ addons:
                 name: "fhunleth/raspijpgs"
                 description: ""
              notification_email: fhunleth@troodon-software.com
-             build_command: "INCLUDES=\"-Iuserland/host_applications/linux/libs/bcm_host/include -Iuserland -Iuserland/interface/vcos/pthreads -Iuserland/interface/vmcs_host/linux\" make raspijpgs.o"
+             build_command: "make travis"
              branch_pattern: coverity_scan
