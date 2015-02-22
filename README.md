@@ -13,12 +13,10 @@ used. This one is based on raspimjpeg.
 
 Run the following on the Raspberry Pi:
 
-    # Assumes Raspian - modify accordingly
-    sudo apt-get install cmake
+    # Assumes Raspian - see Makefile if VideoCore headers aren't in /opt/vc
 
     git clone https://github.com/fhunleth/raspijpgs.git
     cd raspijpgs
-    cmake .
     make
     sudo make install
 

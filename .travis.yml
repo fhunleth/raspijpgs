@@ -4,5 +4,6 @@ compiler:
     - gcc
 
 script:
-    - cmake . && make
+    - git clone --depth=1 git@github.com:raspberrypi/userland.git
+    - VC_DIR=userland/ make raspijpgs.o
 
