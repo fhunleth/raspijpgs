@@ -549,6 +549,10 @@ static void fillin_defaults()
                 err(EXIT_FAILURE, "Error setting %s to %s", opt->env_key, opt->default_value);
         }
     }
+
+    // TODO: To expose framing to the environment or not????
+    if (!state.framing)
+        state.framing = "cat";
 }
 
 static void apply_parameters(enum config_context context)
@@ -574,8 +578,10 @@ static void parse_args(int argc, char *argv[])
             for (opt = opts; opt->long_option; opt++)
                 if (strcmp(opt->long_option, key) == 0)
                     break;
-            if (!opt->long_option)
-                errx(EXIT_FAILURE, "Unknown option '%s'", key);
+            if (!opt->long_option) {
+                warnx("Unknown option '%s'", key);
+                help(0, 0, 0);
+            }
 
             if (!value && i < argc - 1 && !is_long_option(argv[i + 1]) && !is_short_option(argv[i + 1]))
                 value = argv[++i];
@@ -586,15 +592,19 @@ static void parse_args(int argc, char *argv[])
             for (opt = opts; opt->long_option; opt++)
                 if (opt->short_option && strcmp(opt->short_option, key) == 0)
                     break;
-            if (!opt->long_option)
-                errx(EXIT_FAILURE, "Unknown option '%s'", key);
+            if (!opt->long_option) {
+                warnx("Unknown option '%s'", key);
+                help(0, 0, 0);
+            }
 
             if (i < argc - 1)
                 value = argv[++i];
             else
                 value = "on"; // if no value, then this is a boolean argument, so set to on
-        } else
-            errx(EXIT_FAILURE, "Unexpected parameter '%s'", argv[i]);
+        } else {
+            warnx("Unexpected parameter '%s'", argv[i]);
+            help(0, 0, 0);
+        }
 
         opt->set(opt, value, 1); // "replace" -> commandline args have highest precedence
     }
@@ -782,12 +792,12 @@ static void output_jpeg(char *buf, int len)
         iovs[0].iov_len = multipart_header_len;
         iovs[1].iov_base = buf;
         iovs[1].iov_len = len;
-        iovs[2].iov_base = mime_boundary;
+        iovs[2].iov_base = (char *) mime_boundary; // silence warning
         iovs[2].iov_len = strlen(mime_boundary);
         int count = writev(state.output_fd, iovs, 3);
         if (count < 0)
             err(EXIT_FAILURE, "Error writing to %s", state.output_filename);
-        else if (count != len)
+        else if (count != iovs[0].iov_len + iovs[1].iov_len + iovs[2].iov_len)
             warnx("Unexpected truncation of JPEG when writing to %s", state.output_filename);
     } else if (strcmp(state.framing, "header") == 0) {
         struct iovec iovs[2];
@@ -799,11 +809,11 @@ static void output_jpeg(char *buf, int len)
         int count = writev(state.output_fd, iovs, 2);
         if (count < 0)
             err(EXIT_FAILURE, "Error writing to %s", state.output_filename);
-        else if (count != len)
+        else if (count != iovs[0].iov_len + iovs[1].iov_len)
             warnx("Unexpected truncation of JPEG when writing to %s", state.output_filename);
     } else if (strcmp(state.framing, "replace") == 0) {
         // replace the output file with the latest image
-        int fd = open(state.output_tmp_filename, O_WRONLY | O_CREAT | O_CLOEXEC);
+        int fd = open(state.output_tmp_filename, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
         if (fd < 0)
             err(EXIT_FAILURE, "Can't create %s", state.output_tmp_filename);
         int count = write(fd, buf, len);
@@ -973,6 +983,9 @@ void start_all()
     if (mmal_port_parameter_set_uint32(state.jpegencoder->output[0], MMAL_PARAMETER_JPEG_Q_FACTOR, quality) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set jpeg quality");
 
+    if (mmal_port_parameter_set_boolean(state.jpegencoder->output[0], MMAL_PARAMETER_EXIF_DISABLE, 1) != MMAL_SUCCESS)
+        errx(EXIT_FAILURE, "Could not turn off EXIF");
+       
     if (mmal_component_enable(state.jpegencoder) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not enable image encoder");
     state.pool_jpegencoder = mmal_port_pool_create(state.jpegencoder->output[0], state.jpegencoder->output[0]->buffer_num, state.jpegencoder->output[0]->buffer_size);
@@ -1028,6 +1041,7 @@ void start_all()
         if (mmal_port_send_buffer(state.jpegencoder->output[0], jpegbuffer) != MMAL_SUCCESS)
             errx(EXIT_FAILURE, "Could not send buffers to jpeg port");
     }
+
 }
 
 void stop_all()
@@ -1132,14 +1146,6 @@ static void cleanup_client()
     unlink(state.client_addrs[0].sun_path);
 }
 
-static void emit_mime_header()
-{
-    if (state.no_output)
-        return;
-
-    write(state.output_fd, mime_header, strlen(mime_header));
-}
-
 static void client_loop()
 {
     if (state.no_output) {
@@ -1194,8 +1200,10 @@ static void client_loop()
                   state.server_addr.sun_path);
             continue;
         }
-
-        printf("Got %d bytes from server\n", bytes_received);
+	
+	output_jpeg(state.buffer, bytes_received);
+        if (state.count > 0)
+            state.count--;
     }
 }
 
@@ -1228,15 +1236,14 @@ int main(int argc, char* argv[])
         if (strcmp(state.framing, "replace") == 0) {
             // With 'replace' framing, we create a new file every time and
             // rename it to the output file.
-            asprintf(state.output_tmp_filename, "%s.tmp", output_filename);
+            asprintf(&state.output_tmp_filename, "%s.tmp", state.output_filename);
             state.output_fd = -1;
         } else {
             // For all other framing, we can open the file once
-            state.output_fd = open(output_filename, O_WRONLY | O_CREAT | O_CLOEXEC);
+            state.output_fd = open(state.output_filename, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
             if (state.output_fd < 0)
-                err(EXIT_FAILURE, "Can't create %s", output_filename);
+                err(EXIT_FAILURE, "Can't create %s", state.output_filename);
         }
-        state.output_fd = open(output_filename, O)
     } else {
         // No output, so make sure that we don't even try.
         state.output_fd = -1;
@@ -1246,7 +1253,8 @@ int main(int argc, char* argv[])
     // Emit the MIME header if in mime framing mode
     if (!state.no_output &&
             strcmp(state.framing, "mime") == 0 &&
-            write(state.output_fd, mime_header, strlen(mime_header)) < 0)
+            (write(state.output_fd, mime_header, strlen(mime_header)) < 0 ||
+             write(state.output_fd, mime_boundary, strlen(mime_boundary)) < 0))
         err(EXIT_FAILURE, "Error writing to %s", state.output_filename);
 
     // Capture SIGINT and SIGTERM so that we exit gracefully
