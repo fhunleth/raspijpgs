@@ -1161,7 +1161,7 @@ static void server_loop()
     fds[2].fd = STDIN_FILENO;
     fds[2].events = POLLIN;
     while (state.count != 0) {
-        int ready = poll(fds, 2, 2000);
+        int ready = poll(fds, 3, 2000);
         if (ready < 0) {
             if (errno != EINTR)
                 err(EXIT_FAILURE, "poll");

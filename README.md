@@ -146,25 +146,33 @@ help            | | 	 Print a help message
 
 ## Client/Server Protocol
 
-When integrating your program with `raspijpgs`, you may want
-to communicate directly with the `raspijpgs` server. By default, the
-server creates a Unix Domain socket file called `/tmp/raspijpgs`. Configuration
-commands are sent to the socket. An empty command is ok. Once the
-server receives a command, it starts forwarding JPEG frames to the
-client. The Unix Domain socket is run in datagram mode, so you'll
-need to bind the client to a file for it to receive frames. Numerous
-examples of how to do this exist on the web. Each datagram from
-the server is one JPEG frame. Configuration commands may be sent
-to the server at any time. The format is identical to the file format.
-E.g., to change the contrast, send a packet containing the string
-"contrast=70". It is ok to change multiple configuration parameters
-at a time. Each request is separated by a new line character ('\n').
+When integrating your program with `raspijpgs`, you have a few options for
+communicating with the `raspijpgs` server. The first is just to call
+`raspijpgs` like in the example above to send commands and receive frames.
+
+A second approach is to specify `--output -` to the server so that it sends
+frames out stdout. Use the `--framing` option so that the frames are output in
+a convenient form. For control, the server reads stdin for commands. Each
+command is of the form 'key=value\n' or just 'key\n' to enable boolean options. 
+To exit the server, send `quit`.
+
+A third option is to communicate with a `raspijpgs` server using a Unix Domain
+socket in datagram mode.  By default, the server creates a socket file named
+`/tmp/raspijpgs`. Configuration commands are sent to the socket. An empty
+command is ok. Once the server receives a command, it starts forwarding JPEG
+frames to the client's Unix Domain socket. Make sure that you bind the client
+socket to a file for it to receive frames. Numerous examples of how to do this
+exist on the web. Each datagram from the server is one JPEG frame.
+Configuration commands may be sent to the server at any time. The format is
+identical to the file format.  E.g., to change the contrast, send a packet
+containing the string "contrast=70". It is ok to change multiple configuration
+parameters at a time by separating them with '\n' characters.
 
 You can almost use `nc` to interact with `raspijpgs` with the exception that it
-cannot receive the large Unix Domain socket packets containing JPEG images (the buffer
-size is hardcoded to 2K bytes.) Sending configurations using `nc` works
-fine, but make sure that you tell `nc` to quit or it will accumulate a lot
-of 2K JPEG fragments.
+cannot receive the large Unix Domain socket packets containing JPEG images (the
+buffer size is hardcoded to 2K bytes.) Sending configurations using `nc` works
+fine, but make sure that you tell `nc` to quit or it will accumulate a lot of
+2K JPEG fragments.
 
 # License
 
