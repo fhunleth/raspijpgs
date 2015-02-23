@@ -73,6 +73,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define MAX_CLIENTS                 8
 #define MAX_DATA_BUFFER_SIZE        65536
+#define MAX_REQUEST_BUFFER_SIZE     4096
 
 #define UNUSED(expr) do { (void)(expr); } while (0)
 
@@ -128,8 +129,10 @@ struct raspijpgs_state
 
     // Communication
     int socket_fd;
-    char *buffer;
-    int buffer_ix;
+    char *socket_buffer;
+    int socket_buffer_ix;
+    char *stdin_buffer;
+    int stdin_buffer_ix;
 
     struct sockaddr_un server_addr;
     struct sockaddr_un client_addrs[MAX_CLIENTS];
@@ -887,20 +890,20 @@ static void jpegencoder_buffer_callback_impl()
 
     mmal_buffer_header_mem_lock(buffer);
 
-    if (state.buffer_ix == 0 &&
+    if (state.socket_buffer_ix == 0 &&
             (buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END) &&
             buffer->length <= MAX_DATA_BUFFER_SIZE) {
         // Easy case: JPEG all in one buffer
         distribute_jpeg((const char *) buffer->data, buffer->length);
     } else {
         // Hard case: assemble JPEG
-        if (state.buffer_ix + buffer->length > MAX_DATA_BUFFER_SIZE) {
-            warnx("Frame too large (%d bytes). Dropping. Adjust MAX_DATA_BUFFER_SIZE.", state.buffer_ix + buffer->length);
+        if (state.socket_buffer_ix + buffer->length > MAX_DATA_BUFFER_SIZE) {
+            warnx("Frame too large (%d bytes). Dropping. Adjust MAX_DATA_BUFFER_SIZE.", state.socket_buffer_ix + buffer->length);
         } else {
-            memcpy(&state.buffer[state.buffer_ix], buffer->data, buffer->length);
-            state.buffer_ix += buffer->length;
+            memcpy(&state.socket_buffer[state.socket_buffer_ix], buffer->data, buffer->length);
+            state.socket_buffer_ix += buffer->length;
             if (buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END)
-                distribute_jpeg(state.buffer, state.buffer_ix);
+                distribute_jpeg(state.socket_buffer, state.socket_buffer_ix);
         }
     }
 
@@ -1073,7 +1076,7 @@ static void server_service_client()
     socklen_t from_addr_len = sizeof(struct sockaddr_un);
 
     int bytes_received = recvfrom(state.socket_fd,
-                                  state.buffer, MAX_DATA_BUFFER_SIZE, 0,
+                                  state.socket_buffer, MAX_DATA_BUFFER_SIZE, 0,
                                   &from_addr, &from_addr_len);
     if (bytes_received < 0) {
         if (errno == EINTR)
@@ -1084,8 +1087,8 @@ static void server_service_client()
 
     add_client(&from_addr);
 
-    state.buffer[bytes_received] = 0;
-    char *line = state.buffer;
+    state.socket_buffer[bytes_received] = 0;
+    char *line = state.socket_buffer;
     char *line_end;
     do {
         line_end = strchr(line, '\n');
@@ -1094,6 +1097,30 @@ static void server_service_client()
         parse_config_line(line, config_context_client_request);
         line = line_end + 1;
     } while (line_end);
+}
+
+static void server_service_stdin()
+{
+    // Read in everything on stdin and process all of the lines
+    // that we know are lines. (i.e., they have a '\n' at the end)
+    int amount_read = read(STDIN_FILENO, &state.stdin_buffer[state.stdin_buffer_ix], MAX_REQUEST_BUFFER_SIZE - state.stdin_buffer_ix - 1);
+    state.stdin_buffer_ix += amount_read;
+    state.stdin_buffer[state.stdin_buffer_ix] = '\0';
+
+    char *line = state.stdin_buffer;
+    char *line_end = strchr(line, '\n');
+    while (line_end) {
+        *line_end = '\0';
+        parse_config_line(line, config_context_client_request);
+        line = line_end + 1;
+        line_end = strchr(line, '\n');
+    }
+
+    // Advance the buffer to process any leftovers next time
+    int amount_processed = line - state.stdin_buffer;
+    state.stdin_buffer_ix -= amount_processed;
+    if (amount_processed > 0)
+        memmove(state.stdin_buffer, line, state.stdin_buffer_ix);
 }
 
 static void server_service_mmal()
@@ -1125,28 +1152,36 @@ static void server_loop()
     atexit(cleanup_server);
 
     // Main loop - keep going until we don't want any more JPEGs.
-    struct pollfd fds[2];
-    fds[0].fd = state.socket_fd;
+    state.stdin_buffer = (char*) malloc(MAX_REQUEST_BUFFER_SIZE);
+    struct pollfd fds[3];
+    fds[0].fd = state.mmal_callback_pipe[0];
     fds[0].events = POLLIN;
-    fds[1].fd = state.mmal_callback_pipe[0];
+    fds[1].fd = state.socket_fd;
     fds[1].events = POLLIN;
-
+    fds[2].fd = STDIN_FILENO;
+    fds[2].events = POLLIN;
     while (state.count != 0) {
-        int ready = poll(fds, 2, -1);
+        int ready = poll(fds, 2, 2000);
         if (ready < 0) {
             if (errno != EINTR)
                 err(EXIT_FAILURE, "poll");
+        } else if (ready == 0) {
+            // Time out - something is wrong that we're not getting MMAL callbacks
+            errx(EXIT_FAILURE, "MMAL unresponsive. Video stuck?");
         } else {
             if (fds[0].revents)
-                server_service_client();
-            if (fds[1].revents)
                 server_service_mmal();
+            if (fds[1].revents)
+                server_service_client();
+            if (fds[2].revents)
+                server_service_stdin();
         }
     }
 
     stop_all();
     close(state.mmal_callback_pipe[0]);
     close(state.mmal_callback_pipe[1]);
+    free(state.stdin_buffer);
 }
 
 static void cleanup_client()
@@ -1189,30 +1224,43 @@ static void client_loop()
         err(EXIT_FAILURE, "Error communicating with server");
 
     // Main loop - keep going until we don't want any more JPEGs.
+    struct pollfd fds[1];
+    fds[0].fd = state.socket_fd;
+    fds[0].events = POLLIN;
     while (state.count != 0) {
-        struct sockaddr_un from_addr = {0};
-        socklen_t from_addr_len = sizeof(struct sockaddr_un);
+        int ready = poll(fds, 1, 2000);
+        if (ready < 0) {
+            if (errno != EINTR)
+                err(EXIT_FAILURE, "poll");
+        } else if (ready == 0) {
+            // If we timeout, then something isn't good with the server.
+            // We should be getting frames like crazy.
+            errx(EXIT_FAILURE, "Server unresponsive");
+        } else if (fds[0].revents) {
+            struct sockaddr_un from_addr = {0};
+            socklen_t from_addr_len = sizeof(struct sockaddr_un);
 
-        int bytes_received = recvfrom(state.socket_fd,
-                                      state.buffer, MAX_DATA_BUFFER_SIZE, 0,
-                                      &from_addr, &from_addr_len);
-        if (bytes_received < 0) {
-            if (errno == EINTR)
+            int bytes_received = recvfrom(state.socket_fd,
+                                          state.socket_buffer, MAX_DATA_BUFFER_SIZE, 0,
+                                          &from_addr, &from_addr_len);
+            if (bytes_received < 0) {
+                if (errno == EINTR)
+                    continue;
+
+                err(EXIT_FAILURE, "recvfrom");
+            }
+            if (from_addr.sun_family != state.server_addr.sun_family ||
+                strcmp(from_addr.sun_path, state.server_addr.sun_path) != 0) {
+                warnx("Dropping message from unexpected sender %s. Server should be %s",
+                      from_addr.sun_path,
+                      state.server_addr.sun_path);
                 continue;
+            }
 
-            err(EXIT_FAILURE, "recvfrom");
+            output_jpeg(state.socket_buffer, bytes_received);
+            if (state.count > 0)
+                state.count--;
         }
-        if (from_addr.sun_family != state.server_addr.sun_family ||
-            strcmp(from_addr.sun_path, state.server_addr.sun_path) != 0) {
-            warnx("Dropping message from unexpected sender %s. Server should be %s",
-                  from_addr.sun_path,
-                  state.server_addr.sun_path);
-            continue;
-        }
-
-	output_jpeg(state.buffer, bytes_received);
-        if (state.count > 0)
-            state.count--;
     }
 }
 
@@ -1229,8 +1277,8 @@ int main(int argc, char* argv[])
         errx(EXIT_FAILURE, "Both --client and --server requested");
 
     // Allocate buffers
-    state.buffer = (char *) malloc(MAX_DATA_BUFFER_SIZE);
-    if (!state.buffer)
+    state.socket_buffer = (char *) malloc(MAX_DATA_BUFFER_SIZE);
+    if (!state.socket_buffer)
         err(EXIT_FAILURE, "malloc");
 
     // Create output files if any
@@ -1295,7 +1343,7 @@ int main(int argc, char* argv[])
     else
         client_loop();
 
-    free(state.buffer);
+    free(state.socket_buffer);
     if (state.output_fd >= 0 && state.output_fd != STDOUT_FILENO)
         close(state.output_fd);
 
