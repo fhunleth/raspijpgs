@@ -397,6 +397,7 @@ static void imxfx_apply(const struct raspi_config_opt *opt, enum config_context 
     else if(strcmp(str, "blur") == 0) imageFX = MMAL_PARAM_IMAGEFX_BLUR;
     else if(strcmp(str, "saturation") == 0) imageFX = MMAL_PARAM_IMAGEFX_SATURATION;
     else if(strcmp(str, "colourswap") == 0) imageFX = MMAL_PARAM_IMAGEFX_COLOURSWAP;
+    else if(strcmp(str, "colorswap") == 0) imageFX = MMAL_PARAM_IMAGEFX_COLOURSWAP;
     else if(strcmp(str, "washedout") == 0) imageFX = MMAL_PARAM_IMAGEFX_WASHEDOUT;
     else if(strcmp(str, "posterise") == 0) imageFX = MMAL_PARAM_IMAGEFX_POSTERISE;
     else if(strcmp(str, "posterize") == 0) imageFX = MMAL_PARAM_IMAGEFX_POSTERISE;
@@ -549,6 +550,20 @@ static void help(const struct raspi_config_opt *opt, const char *value, enum con
         else
             fprintf(stderr, "  --%-20s\t %s\n", o->long_option, o->help);
     }
+
+    fprintf(stderr,
+            "\n"
+            "Exposure (--exposure) options: auto, night, nightpreview, backlight,\n"
+            "    spotlight, sports, snow, beach, verylong, fixedfps, antishake,\n"
+            "    fireworks\n"
+            "White balance (--awb) options: auto, sun, cloudy, shade, tungsten,\n"
+            "    fluorescent, flash, horizon\n"
+            "Image effect (--imxfx) options: none, negative, solarize, sketch,\n"
+            "    denoise, emboss, oilpaint, hatch, gpen, pastel, watercolor, film,\n"
+            "    blur, saturation, colorswap, washedout, posterize, colorpoint,\n"
+            "    colorbalance, cartoon\n"
+            "Metering (--meetering) options: average, spot, backlit, matrix\n"
+            );
 
     // It make sense to exit in all non-client request contexts
     exit(EXIT_FAILURE);
