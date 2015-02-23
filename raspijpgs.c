@@ -107,6 +107,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Globals
 
 enum config_context {
+    config_context_parse_cmdline,
     config_context_file,
     config_context_server_start,
     config_context_client_request
@@ -169,7 +170,7 @@ struct raspi_config_opt
 
     // Record the value (called as options are set)
     // Set replace=0 to only set the value if it hasn't been set already.
-    void (*set)(const struct raspi_config_opt *, const char *value, int replace);
+    void (*set)(const struct raspi_config_opt *, const char *value, enum config_context context);
 
     // Apply the option (called on every option)
     void (*apply)(const struct raspi_config_opt *, enum config_context context);
@@ -182,14 +183,18 @@ static const char *mime_boundary = "\r\n--jpegboundary\r\n";
 static const char *mime_multipart_header_format = "Content-Type: image/jpeg\r\n" \
                                                   "Content-Length: %d\r\n\r\n";
 
-static void default_set(const struct raspi_config_opt *opt, const char *value, int replace)
+static void default_set(const struct raspi_config_opt *opt, const char *value, enum config_context context)
 {
     if (!opt->env_key)
         return;
 
+    // setenv's 3rd parameter is whether to replace a value if it already
+    // exists. Sets are done in the order of Environment, commandline, file.
+    // Since the file should be the lowest priority, set it to not replace
+    // here.
+    int replace = (context != config_context_file);
+
     if (value) {
-        // The replace option is set to 0, so that anything set in the environment
-        // is an override.
         if (setenv(opt->env_key, value, replace) < 0)
             err(EXIT_FAILURE, "Error setting %s to %s", opt->env_key, opt->default_value);
     } else {
@@ -205,20 +210,24 @@ static void setstring(char **left, const char *right)
     *left = strdup(right);
 }
 
-static void config_set(const struct raspi_config_opt *opt, const char *value, int replace)
+static void config_set(const struct raspi_config_opt *opt, const char *value, enum config_context context)
 {
-    UNUSED(opt); UNUSED(replace);
+    UNUSED(opt); UNUSED(context);
     setstring(&state.config_filename, value);
 }
-static void framing_set(const struct raspi_config_opt *opt, const char *value, int replace)
+static void framing_set(const struct raspi_config_opt *opt, const char *value, enum config_context context)
 {
-    UNUSED(opt); UNUSED(replace);
+    UNUSED(opt); UNUSED(context);
     setstring(&state.framing, value);
 }
-static void send_set(const struct raspi_config_opt *opt, const char *value, int replace)
+static void send_set(const struct raspi_config_opt *opt, const char *value, enum config_context context)
 {
     UNUSED(opt);
-    UNUSED(replace);
+
+    // If a client is telling us to send, then ignore it
+    // since it doesn't make sense.
+    if (context == config_context_client_request)
+        return;
 
     // Send lists are intended to look like config files for ease of parsing
     const char *equals = strchr(value, '=');
@@ -240,23 +249,23 @@ static void send_set(const struct raspi_config_opt *opt, const char *value, int 
     } else
         state.sendlist = strdup(value);
 }
-static void quit_set(const struct raspi_config_opt *opt, const char *value, int replace)
+static void quit_set(const struct raspi_config_opt *opt, const char *value, enum config_context context)
 {
-    UNUSED(opt); UNUSED(value); UNUSED(replace);
+    UNUSED(opt); UNUSED(value); UNUSED(context);
     state.count = 0;
 }
-static void server_set(const struct raspi_config_opt *opt, const char *value, int replace)
+static void server_set(const struct raspi_config_opt *opt, const char *value, enum config_context context)
 {
-    UNUSED(opt); UNUSED(value); UNUSED(replace);
+    UNUSED(opt); UNUSED(value); UNUSED(context);
     state.user_wants_server = 1;
 }
-static void client_set(const struct raspi_config_opt *opt, const char *value, int replace)
+static void client_set(const struct raspi_config_opt *opt, const char *value, enum config_context context)
 {
-    UNUSED(opt); UNUSED(value); UNUSED(replace);
+    UNUSED(opt); UNUSED(value); UNUSED(context);
     state.user_wants_client = 1;
 }
 
-static void help(const struct raspi_config_opt *opt, const char *value, int replace);
+static void help(const struct raspi_config_opt *opt, const char *value, enum config_context context);
 
 static void width_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
 static void annotation_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
@@ -522,9 +531,15 @@ static struct raspi_config_opt opts[] =
     {0,             0,      0,                       0,                                                      0,          0,           0}
 };
 
-static void help(const struct raspi_config_opt *opt, const char *value, int replace)
+static void help(const struct raspi_config_opt *opt, const char *value, enum config_context context)
 {
-    UNUSED(opt); UNUSED(value); UNUSED(replace);
+    UNUSED(opt); UNUSED(value);
+
+    // Don't provide help if this is a request from a connected client
+    // since the user won't see it.
+    if (context == config_context_client_request)
+        return;
+
     fprintf(stderr, "raspijpgs [options]\n");
 
     const struct raspi_config_opt *o;
@@ -535,7 +550,8 @@ static void help(const struct raspi_config_opt *opt, const char *value, int repl
             fprintf(stderr, "  --%-20s\t %s\n", o->long_option, o->help);
     }
 
-    exit(EXIT_SUCCESS);
+    // It make sense to exit in all non-client request contexts
+    exit(EXIT_FAILURE);
 }
 
 static int is_long_option(const char *str)
@@ -616,7 +632,7 @@ static void parse_args(int argc, char *argv[])
         }
 
         if (opt)
-            opt->set(opt, value, 1); // "replace" -> commandline args have highest precedence
+            opt->set(opt, value, config_context_parse_cmdline);
     }
 }
 
@@ -677,11 +693,11 @@ static void parse_config_line(const char *line, enum config_context context)
 
     switch (context) {
     case config_context_file:
-        opt->set(opt, value, 0); // "don't replace" -> file arguments can be overridden by the environment and commandline
+        opt->set(opt, value, context);
         break;
 
     case config_context_client_request:
-        opt->set(opt, value, 1);
+        opt->set(opt, value, context);
         if (opt->apply)
             opt->apply(opt, context);
         break;
