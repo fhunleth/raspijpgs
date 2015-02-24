@@ -1191,6 +1191,9 @@ static void server_service_stdin()
 {
     // Read in everything on stdin and see what gets processed
     int amount_read = read(STDIN_FILENO, &state.stdin_buffer[state.stdin_buffer_ix], MAX_REQUEST_BUFFER_SIZE - state.stdin_buffer_ix - 1);
+    if (amount_read < 0)
+        err(EXIT_FAILURE, "Error reading stdin");
+
     state.stdin_buffer_ix += amount_read;
 
     // If we're in header framing mode, then everything sent and
