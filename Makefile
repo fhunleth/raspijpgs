@@ -10,8 +10,9 @@ SRCS=raspijpgs.c
 INCLUDES?=-I$(VC_DIR)/include -I$(VC_DIR)/include/interface/vcos/pthreads -I$(VC_DIR)/include/interface/vmcs_host/linux
 LIBS=-L$(VC_DIR)/lib -lmmal_core -lmmal_util -lmmal_vc_client -Lvcos -lbcm_host
 OBJS=$(SRCS:.c=.o)
-CFLAGS=-Wall -O2
-LDFLAGS=
+CFLAGS?=-Wall -O2
+LDFLAGS?=
+STRIP?=strip
 
 all: raspijpgs
 raspijpgs: $(OBJS)
@@ -31,7 +32,7 @@ travis:
 
 install:
 	install -m 755 -D raspijpgs $(INSTALL_PREFIX)/bin/raspijpgs
-	strip $(INSTALL_PREFIX)/bin/raspijpgs
+	$(STRIP) $(INSTALL_PREFIX)/bin/raspijpgs
 
 clean:
 	rm -f $(OBJS) raspijpgs
