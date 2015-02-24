@@ -48,7 +48,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdlib.h>
 #include <string.h>
 #include <memory.h>
-#include <semaphore.h>
 #include <signal.h>
 #include <fcntl.h>
 #include <time.h>
@@ -60,11 +59,11 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <arpa/inet.h> // for ntohl
 
 #include "bcm_host.h"
 #include "interface/vcos/vcos.h"
 #include "interface/mmal/mmal.h"
-#include "interface/mmal/mmal_logging.h"
 #include "interface/mmal/mmal_buffer.h"
 #include "interface/mmal/util/mmal_util.h"
 #include "interface/mmal/util/mmal_util_params.h"
@@ -846,7 +845,7 @@ static void output_jpeg(const char *buf, int len)
             warnx("Unexpected truncation of JPEG when writing to %s", state.output_filename);
     } else if (strcmp(state.framing, "header") == 0) {
         struct iovec iovs[2];
-        int32_t len32 = len;
+        uint32_t len32 = htonl(len);
         iovs[0].iov_base = &len32;
         iovs[0].iov_len = sizeof(int32_t);
         iovs[1].iov_base = (char *) buf; // silence warning
@@ -1101,6 +1100,19 @@ void stop_all()
     mmal_component_destroy(state.camera);
 }
 
+static void parse_config_lines(char *lines)
+{
+    char *line = lines;
+    char *line_end;
+    do {
+        line_end = strchr(line, '\n');
+        if (line_end)
+            *line_end = '\0';
+        parse_config_line(line, config_context_client_request);
+        line = line_end + 1;
+    } while (line_end);
+}
+
 static void server_service_client()
 {
     struct sockaddr_un from_addr = {0};
@@ -1119,23 +1131,13 @@ static void server_service_client()
     add_client(&from_addr);
 
     state.socket_buffer[bytes_received] = 0;
-    char *line = state.socket_buffer;
-    char *line_end;
-    do {
-        line_end = strchr(line, '\n');
-        if (line_end)
-            *line_end = '\0';
-        parse_config_line(line, config_context_client_request);
-        line = line_end + 1;
-    } while (line_end);
+    parse_config_lines(state.socket_buffer);
 }
 
-static void server_service_stdin()
+static void process_stdin_line_framing()
 {
-    // Read in everything on stdin and process all of the lines
-    // that we know are lines. (i.e., they have a '\n' at the end)
-    int amount_read = read(STDIN_FILENO, &state.stdin_buffer[state.stdin_buffer_ix], MAX_REQUEST_BUFFER_SIZE - state.stdin_buffer_ix - 1);
-    state.stdin_buffer_ix += amount_read;
+    // Process all of the lines that we know are lines.
+    // (i.e., they have a '\n' at the end)
     state.stdin_buffer[state.stdin_buffer_ix] = '\0';
 
     char *line = state.stdin_buffer;
@@ -1152,6 +1154,52 @@ static void server_service_stdin()
     state.stdin_buffer_ix -= amount_processed;
     if (amount_processed > 0)
         memmove(state.stdin_buffer, line, state.stdin_buffer_ix);
+}
+
+static unsigned int from_uint32_be(const char *buffer)
+{
+    uint8_t *buf = (uint8_t*) buffer;
+    return (buf[0] << 24) | (buf[1] << 16) | (buf[2] << 8) | buf[4];
+}
+
+static void process_stdin_header_framing()
+{
+    // Each packet is length (4 bytes big endian), data
+    unsigned int len = 0;
+    while (state.stdin_buffer_ix > 4 &&
+           (len = from_uint32_be(state.stdin_buffer)) &&
+           state.stdin_buffer_ix >= 4 + len) {
+        // Copy over the lines to process so that they can be
+        // null terminated.
+        char lines[len + 1];
+        memcpy(lines, state.stdin_buffer + 4, len);
+        lines[len] = '\0';
+
+        parse_config_lines(lines);
+
+        // Advance to the next packet
+        state.stdin_buffer_ix -= 4 + len;
+        memmove(state.stdin_buffer, state.stdin_buffer + 4 + len, state.stdin_buffer_ix);
+    }
+
+    // Check if we got a bogus length packet
+    if (len >= MAX_DATA_BUFFER_SIZE - 4 - 1)
+        errx(EXIT_FAILURE, "Invalid packet size. Out of sync?");
+}
+
+static void server_service_stdin()
+{
+    // Read in everything on stdin and see what gets processed
+    int amount_read = read(STDIN_FILENO, &state.stdin_buffer[state.stdin_buffer_ix], MAX_REQUEST_BUFFER_SIZE - state.stdin_buffer_ix - 1);
+    state.stdin_buffer_ix += amount_read;
+
+    // If we're in header framing mode, then everything sent and
+    // received is prepended by a length. Otherwise it's just text
+    // lines.
+    if (strcmp(state.framing, "header") == 0)
+        process_stdin_header_framing();
+    else
+        process_stdin_line_framing();
 }
 
 static void server_service_mmal()

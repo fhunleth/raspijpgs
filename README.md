@@ -78,9 +78,11 @@ Other options are available, though. Here's the list:
 The `replace` option makes `raspijpgs` work similar to `raspimjpeg` and `raspistill`. Many
 programs that serve Motion JPEG streams expect this kind of operation. The `mime` option
 makes it possible to run `raspijpgs` in a CGI script so that you can stream the browser
-without additional smarts. The `header` option is convenient if you're writing your own
-program to send the JPEGs. The byte count for the `header` option is 4 bytes and stored
-in the native endian (e.g., little endian on the Raspberry Pi.)
+without additional smarts. The `header` option is convenient if your program reads the JPEGs
+from stdout and doesn't want to scan for JPEG SOI markers to separate the
+images. The header is a 4 byte integer (big endian) that specifies the length of
+the JPEG data to follow. When enabling the header option, commands sent via
+stdin must also have length headers, so that the protocol is symetric.
 
 Framing is specified on the invocation of `raspijpgs`, so you can have different
 framing options running at the same time.
