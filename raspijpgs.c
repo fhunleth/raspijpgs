@@ -91,6 +91,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define RASPIJPGS_AWB               "RASPIJPGS_AWB"
 #define RASPIJPGS_IMXFX             "RASPIJPGS_IMXFX"
 #define RASPIJPGS_COLFX             "RASPIJPGS_COLFX"
+#define RASPIJPGS_SENSOR_MODE       "RASPIJPGS_SENSOR_MODE"
 #define RASPIJPGS_METERING          "RASPIJPGS_METERING"
 #define RASPIJPGS_ROTATION          "RASPIJPGS_ROTATION"
 #define RASPIJPGS_HFLIP             "RASPIJPGS_HFLIP"
@@ -467,6 +468,12 @@ static void flip_apply(const struct raspi_config_opt *opt, enum config_context c
     if (mmal_port_parameter_set(state.camera->output[0], &mirror.hdr) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s", opt->long_option);
 }
+static void sensor_mode_apply(const struct raspi_config_opt *opt, enum config_context context)
+{
+    // TODO
+    UNUSED(opt);
+    UNUSED(context);
+}
 static void roi_apply(const struct raspi_config_opt *opt, enum config_context context)
 {
     // TODO
@@ -508,11 +515,12 @@ static struct raspi_config_opt opts[] =
     {"awb",         "awb",  RASPIJPGS_AWB,          "Set Automatic White Balance (AWB) mode",               "auto",     default_set, awb_apply},
     {"imxfx",       "ifx",  RASPIJPGS_IMXFX,        "Set image effect",                                     "none",     default_set, imxfx_apply},
     {"colfx",       "cfx",  RASPIJPGS_COLFX,        "Set colour effect <U:V>",                              "",         default_set, colfx_apply},
+    {"mode",        "md",   RASPIJPGS_SENSOR_MODE,  "Set sensor mode (0 to 7)",                             "0",        default_set, sensor_mode_apply},
     {"metering",    "mm",   RASPIJPGS_METERING,     "Set metering mode",                                    "average",  default_set, metering_apply},
     {"rotation",    "rot",  RASPIJPGS_ROTATION,     "Set image rotation (0-359)",                           "0",        default_set, rotation_apply},
     {"hflip",       "hf",   RASPIJPGS_HFLIP,        "Set horizontal flip",                                  "off",      default_set, flip_apply},
     {"vflip",       "vf",   RASPIJPGS_VFLIP,        "Set vertical flip",                                    "off",      default_set, flip_apply},
-    {"roi",         "roi",  RASPIJPGS_ROI,          "Set sensor region of interest",                        "0:0:65536:65536", default_set, roi_apply},
+    {"roi",         "roi",  RASPIJPGS_ROI,          "Set region of interest (x,y,w,d as normalised coordinates [0.0-1.0])", "0:0:1:1", default_set, roi_apply},
     {"shutter",     "ss",   RASPIJPGS_SHUTTER,      "Set shutter speed",                                    "0",        default_set, shutter_apply},
     {"quality",     "q",    RASPIJPGS_QUALITY,      "Set the JPEG quality (0-100)",                         "75",       default_set, quality_apply},
     {"socket",      0,      RASPIJPGS_SOCKET,       "Specify the socket filename for communication",        "/tmp/raspijpgs_socket", default_set, 0},
@@ -561,7 +569,16 @@ static void help(const struct raspi_config_opt *opt, const char *value, enum con
             "    denoise, emboss, oilpaint, hatch, gpen, pastel, watercolor, film,\n"
             "    blur, saturation, colorswap, washedout, posterize, colorpoint,\n"
             "    colorbalance, cartoon\n"
-            "Metering (--meetering) options: average, spot, backlit, matrix\n"
+            "Metering (--metering) options: average, spot, backlit, matrix\n"
+            "Sensor mode (--mode) options:\n"
+            "       0   automatic selection\n"
+            "       1   1920x1080 (16:9) 1-30 fps\n"
+            "       2   2592x1944 (4:3)  1-15 fps\n"
+            "       3   2592x1944 (4:3)  0.1666-1 fps\n"
+            "       4   1296x972  (4:3)  1-42 fps, 2x2 binning\n"
+            "       5   1296x730  (16:9) 1-49 fps, 2x2 binning\n"
+            "       6   640x480   (4:3)  42.1-60 fps, 2x2 binning plus skip\n"
+            "       7   640x480   (4:3)  60.1-90 fps, 2x2 binning plus skip\n"
             );
 
     // It make sense to exit in all non-client request contexts
