@@ -73,12 +73,14 @@ Other options are available, though. Here's the list:
   1. `cat` - concatenate each frame together
   2. `replace` - save each frame to a file. Each frame replaces the contents of the previous file.
   3. `mime` - output a multipart MIME stream with each JPEG in its own part
+  4. `http` - this is similar to MIME except that the client will wait for an HTTP GET request before serving the JPEGs
   4. `header` - output the number of bytes in the JPEG and then the JPEG
 
 The `replace` option makes `raspijpgs` work similar to `raspimjpeg` and `raspistill`. Many
 programs that serve Motion JPEG streams expect this kind of operation. The `mime` option
 makes it possible to run `raspijpgs` in a CGI script so that you can stream the browser
-without additional smarts. The `header` option is convenient if your program reads the JPEGs
+without additional smarts. The `http` option is an extension to `mime` to support running
+`raspijpgs` clients from xinetd or netcat. The `header` option is convenient if your program reads the JPEGs
 from stdout and doesn't want to scan for JPEG SOI markers to separate the
 images. The header is a 4 byte integer (big endian) that specifies the length of
 the JPEG data to follow. When enabling the header option, commands sent via

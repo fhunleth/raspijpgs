@@ -71,7 +71,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "interface/mmal/util/mmal_connection.h"
 
 #define MAX_CLIENTS                 8
-#define MAX_DATA_BUFFER_SIZE        65536
+#define MAX_DATA_BUFFER_SIZE        131072
 #define MAX_REQUEST_BUFFER_SIZE     4096
 
 #define UNUSED(expr) do { (void)(expr); } while (0)
@@ -144,6 +144,7 @@ struct raspijpgs_state
     char *output_filename;
     char *output_tmp_filename;
     char *framing;
+    int http_ready_for_images;
 
     // MMAL resources
     MMAL_COMPONENT_T *camera;
@@ -177,6 +178,22 @@ struct raspi_config_opt
 };
 static struct raspi_config_opt opts[];
 
+static const char *http_ok_response = "HTTP/1.1 200 OK\r\n" \
+                                      "Server: raspijpgs\r\n";
+static const char *http_500_response = "HTTP/1.1 500 Internal Server Error\r\n";
+static const char *http_404_response = "HTTP/1.1 404 Not Found\r\n";
+static const char *http_index_html_response = "Content-Type: text/html; charset=UTF-8\r\n" \
+                                              "Connection: close\r\n" \
+                                              "\r\n" \
+                                              "<!DOCTYPE html>\r\n" \
+                                              "<html>\r\n" \
+                                              "<head>\r\n" \
+                                              "  <title>raspijpg</title>\r\n" \
+                                              "</head>\r\n" \
+                                              "<body>\r\n" \
+                                              "  <img src=\"/video\"/>\r\n" \
+                                              "</body>\r\n" \
+                                              "</html>\r\n";
 static const char *mime_header = "MIME-Version: 1.0\r\n" \
                                  "content-type: multipart/x-mixed-replace;boundary=--jpegboundary\r\n";
 static const char *mime_boundary = "\r\n--jpegboundary\r\n";
@@ -530,7 +547,7 @@ static struct raspi_config_opt opts[] =
 
     // options that can't be overridden using environment variables
     {"config",      "c",    0,                       "Specify a config file to read for options",            0,          config_set, 0},
-    {"framing",     "fr",   0,                       "Specify the output framing (cat, mime, header, replace)", "cat",   framing_set, 0},
+    {"framing",     "fr",   0,                       "Specify the output framing (cat, mime, http, header, replace)", "cat",   framing_set, 0},
     {"send",        0,      0,                       "Send this parameter on the server (e.g. --send shutter=1000)", 0,  send_set, 0},
     {"server",      0,      0,                       "Run as a server",                                      0,          server_set, 0},
     {"client",      0,      0,                       "Run as a client",                                      0,          client_set, 0},
@@ -843,7 +860,8 @@ static void output_jpeg(const char *buf, int len)
     if (state.no_output)
         return;
 
-    if (strcmp(state.framing, "mime") == 0) {
+    if (strcmp(state.framing, "mime") == 0 ||
+	(state.http_ready_for_images && (strcmp(state.framing, "http") == 0))) {
         char multipart_header[256];
         int multipart_header_len =
             sprintf(multipart_header, mime_multipart_header_format, len);
@@ -885,7 +903,7 @@ static void output_jpeg(const char *buf, int len)
         close(fd);
         if (rename(state.output_tmp_filename, state.output_filename) < 0)
             err(EXIT_FAILURE, "Can't rename %s to %s", state.output_tmp_filename, state.output_filename);
-    } else {
+    } else if (strcmp(state.framing, "cat") == 0) {
         // cat (aka concatenate)
         // TODO - Loop to make sure that everything is written.
         int count = write(state.output_fd, buf, len);
@@ -1204,12 +1222,78 @@ static void process_stdin_header_framing()
         errx(EXIT_FAILURE, "Invalid packet size. Out of sync?");
 }
 
-static void server_service_stdin()
+static void write_string(const char *str)
 {
+    if (write(state.output_fd, str, strlen(str)) < 0)
+        err(EXIT_FAILURE, "Error writing to %s", state.output_filename);
+}
+
+static void write_mime_header()
+{
+    write_string(mime_header);
+    write_string(mime_boundary);
+}
+
+static void write_initial_framing()
+{
+    // Emit the MIME header if in mime framing mode
+    if (state.output_fd >= 0 && strcmp(state.framing, "mime") == 0)
+        write_mime_header();
+}
+
+static void process_stdin_http_framing()
+{
+    // If the request has already been processed, then ignore everything else.
+    if (state.http_ready_for_images)
+        state.stdin_buffer_ix = 0;
+
+    state.stdin_buffer[state.stdin_buffer_ix] = '\0';
+    char *end_of_request = strstr(state.stdin_buffer, "\r\n\r\n");
+
+    // Return if we haven't received the complete request
+    if (!end_of_request)
+        return;
+
+    // Respond only to GET requests
+    if (memcmp(state.stdin_buffer, "GET", 3) == 0) {
+       write_string(http_ok_response);
+
+       if (memcmp(&state.stdin_buffer[4], "/ ", 2) == 0 ||
+           memcmp(&state.stdin_buffer[4], "/index.html ", 12) == 0) {
+           // Provide the client with a webpage to load the video
+           write_string(http_index_html_response);
+           state.count = 0;
+       } else if (memcmp(&state.stdin_buffer[4], "/video ", 7) == 0) {
+           // /video for images.
+           write_mime_header();
+           state.http_ready_for_images = 1;
+       } else {
+           write_string(http_404_response);
+           state.count = 0;
+       } 
+    } else {
+       // If not a GET, then respond with an error and quit.
+       write_string(http_500_response);
+       state.count = 0;
+    }
+    state.stdin_buffer_ix = 0;
+}
+
+static int server_service_stdin()
+{
+    // Make sure that we have room to receive more data. If not,
+    // a line is ridiculously long or a frame is messed up, so exit.
+    if (state.stdin_buffer_ix >= MAX_REQUEST_BUFFER_SIZE - 1)
+        err(EXIT_FAILURE, "Line too long on stdin");
+
     // Read in everything on stdin and see what gets processed
     int amount_read = read(STDIN_FILENO, &state.stdin_buffer[state.stdin_buffer_ix], MAX_REQUEST_BUFFER_SIZE - state.stdin_buffer_ix - 1);
     if (amount_read < 0)
         err(EXIT_FAILURE, "Error reading stdin");
+
+    // Check if stdin was closed.
+    if (amount_read == 0)
+        return 0;
 
     state.stdin_buffer_ix += amount_read;
 
@@ -1218,9 +1302,37 @@ static void server_service_stdin()
     // lines.
     if (strcmp(state.framing, "header") == 0)
         process_stdin_header_framing();
+    else if (strcmp(state.framing, "http") == 0)
+        process_stdin_http_framing();
     else
         process_stdin_line_framing();
+
+    return amount_read;
 }
+
+static int client_service_stdin()
+{
+    // Read in everything on stdin and see what gets processed
+    int amount_read = read(STDIN_FILENO, &state.stdin_buffer[state.stdin_buffer_ix], MAX_REQUEST_BUFFER_SIZE - state.stdin_buffer_ix - 1);
+    if (amount_read < 0)
+        err(EXIT_FAILURE, "Error reading stdin");
+
+    // Check if stdin was closed.
+    if (amount_read == 0)
+        return 0;
+
+    state.stdin_buffer_ix += amount_read;
+
+    // Only HTTP framing is supported on the client from stdin
+    // for now.
+    if (strcmp(state.framing, "http") == 0)
+        process_stdin_http_framing();
+    else
+        state.stdin_buffer_ix = 0;
+
+    return amount_read;
+}
+
 
 static void server_service_mmal()
 {
@@ -1250,17 +1362,25 @@ static void server_loop()
         err(EXIT_FAILURE, "Can't create Unix Domain socket at %s", state.server_addr.sun_path);
     atexit(cleanup_server);
 
+    write_initial_framing();
+
     // Main loop - keep going until we don't want any more JPEGs.
-    state.stdin_buffer = (char*) malloc(MAX_REQUEST_BUFFER_SIZE);
     struct pollfd fds[3];
+    int fds_count = 2;
     fds[0].fd = state.mmal_callback_pipe[0];
     fds[0].events = POLLIN;
     fds[1].fd = state.socket_fd;
     fds[1].events = POLLIN;
-    fds[2].fd = STDIN_FILENO;
-    fds[2].events = POLLIN;
+
+    if (!isatty(STDIN_FILENO)) {
+        // Only allow stdin if not a terminal (e.g., pipe, etc.)
+        state.stdin_buffer = (char*) malloc(MAX_REQUEST_BUFFER_SIZE);
+        fds[2].fd = STDIN_FILENO;
+        fds[2].events = POLLIN;
+        fds_count = 3;
+    }
     while (state.count != 0) {
-        int ready = poll(fds, 3, 2000);
+        int ready = poll(fds, fds_count, 2000);
         if (ready < 0) {
             if (errno != EINTR)
                 err(EXIT_FAILURE, "poll");
@@ -1272,8 +1392,10 @@ static void server_loop()
                 server_service_mmal();
             if (fds[1].revents)
                 server_service_client();
-            if (fds[2].revents)
-                server_service_stdin();
+            if (fds_count == 3 && fds[2].revents) {
+                if (server_service_stdin() <= 0)
+                    fds_count = 2;
+            }
         }
     }
 
@@ -1287,6 +1409,33 @@ static void cleanup_client()
 {
     close(state.socket_fd);
     unlink(state.client_addrs[0].sun_path);
+}
+
+static void client_service_server()
+{
+    struct sockaddr_un from_addr = {0};
+    socklen_t from_addr_len = sizeof(struct sockaddr_un);
+
+    int bytes_received = recvfrom(state.socket_fd,
+                                  state.socket_buffer, MAX_DATA_BUFFER_SIZE, 0,
+                                  &from_addr, &from_addr_len);
+    if (bytes_received < 0) {
+        if (errno == EINTR)
+            return;
+
+        err(EXIT_FAILURE, "recvfrom");
+    }
+    if (from_addr.sun_family != state.server_addr.sun_family ||
+        strcmp(from_addr.sun_path, state.server_addr.sun_path) != 0) {
+        warnx("Dropping message from unexpected sender %s. Server should be %s",
+              from_addr.sun_path,
+              state.server_addr.sun_path);
+        return;
+    }
+
+    output_jpeg(state.socket_buffer, bytes_received);
+    if (state.count > 0)
+        state.count--;
 }
 
 static void client_loop()
@@ -1322,12 +1471,22 @@ static void client_loop()
     if (sent != tosend)
         err(EXIT_FAILURE, "Error communicating with server");
 
+    write_initial_framing();
+
     // Main loop - keep going until we don't want any more JPEGs.
-    struct pollfd fds[1];
+    struct pollfd fds[2];
+    int fds_count = 1;
     fds[0].fd = state.socket_fd;
     fds[0].events = POLLIN;
+    if (!isatty(STDIN_FILENO)) {
+        // Only allow stdin if not a terminal (e.g., pipe, etc.)
+        state.stdin_buffer = (char*) malloc(MAX_REQUEST_BUFFER_SIZE);
+        fds[1].fd = STDIN_FILENO;
+        fds[1].events = POLLIN;
+        fds_count = 2;
+    }
     while (state.count != 0) {
-        int ready = poll(fds, 1, 2000);
+        int ready = poll(fds, fds_count, 2000);
         if (ready < 0) {
             if (errno != EINTR)
                 err(EXIT_FAILURE, "poll");
@@ -1335,30 +1494,13 @@ static void client_loop()
             // If we timeout, then something isn't good with the server.
             // We should be getting frames like crazy.
             errx(EXIT_FAILURE, "Server unresponsive");
-        } else if (fds[0].revents) {
-            struct sockaddr_un from_addr = {0};
-            socklen_t from_addr_len = sizeof(struct sockaddr_un);
-
-            int bytes_received = recvfrom(state.socket_fd,
-                                          state.socket_buffer, MAX_DATA_BUFFER_SIZE, 0,
-                                          &from_addr, &from_addr_len);
-            if (bytes_received < 0) {
-                if (errno == EINTR)
-                    continue;
-
-                err(EXIT_FAILURE, "recvfrom");
+        } else {
+            if (fds[0].revents)
+                client_service_server();
+            if (fds_count == 2 && fds[1].revents) {
+                if (client_service_stdin() <= 0)
+                    fds_count = 1;
             }
-            if (from_addr.sun_family != state.server_addr.sun_family ||
-                strcmp(from_addr.sun_path, state.server_addr.sun_path) != 0) {
-                warnx("Dropping message from unexpected sender %s. Server should be %s",
-                      from_addr.sun_path,
-                      state.server_addr.sun_path);
-                continue;
-            }
-
-            output_jpeg(state.socket_buffer, bytes_received);
-            if (state.count > 0)
-                state.count--;
         }
     }
 }
@@ -1407,13 +1549,6 @@ int main(int argc, char* argv[])
         state.output_fd = -1;
         state.no_output = 1;
     }
-
-    // Emit the MIME header if in mime framing mode
-    if (state.output_fd >= 0 &&
-            strcmp(state.framing, "mime") == 0 &&
-            (write(state.output_fd, mime_header, strlen(mime_header)) < 0 ||
-             write(state.output_fd, mime_boundary, strlen(mime_boundary)) < 0))
-        err(EXIT_FAILURE, "Error writing to %s", state.output_filename);
 
     // Capture SIGINT and SIGTERM so that we exit gracefully
     struct sigaction action;
