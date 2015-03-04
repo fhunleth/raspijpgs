@@ -1394,7 +1394,7 @@ static void server_loop()
                 server_service_client();
             if (fds_count == 3 && fds[2].revents) {
                 if (server_service_stdin() <= 0)
-                    fds_count = 2;
+                    state.count = 0;
             }
         }
     }
@@ -1498,8 +1498,9 @@ static void client_loop()
             if (fds[0].revents)
                 client_service_server();
             if (fds_count == 2 && fds[1].revents) {
+                // Service stdin, but quit if the user closes it.
                 if (client_service_stdin() <= 0)
-                    fds_count = 1;
+                    state.count = 0;
             }
         }
     }

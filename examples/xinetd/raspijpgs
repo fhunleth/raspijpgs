@@ -1,0 +1,10 @@
+service raspijpgs
+{
+    socket_type = stream
+    protocol = tcp
+    wait = no
+    user = pi
+    server = /usr/local/bin/raspijpgs
+    server_args = --framing http --output - --client
+    instances = 10
+}

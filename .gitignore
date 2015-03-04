@@ -1,3 +1,2 @@
 *.o
-raspijpgs
-userland
+/raspijpgs
