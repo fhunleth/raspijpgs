@@ -11,7 +11,7 @@ INCLUDES?=-I$(VC_DIR)/include -I$(VC_DIR)/include/interface/vcos/pthreads -I$(VC
 LIBS=-L$(VC_DIR)/lib -lmmal_core -lmmal_util -lmmal_vc_client -Lvcos -lbcm_host
 OBJS=$(SRCS:.c=.o)
 CFLAGS?=-Wall -O2
-LDFLAGS?=
+LDFLAGS?=-lm
 STRIP?=strip
 
 all: raspijpgs

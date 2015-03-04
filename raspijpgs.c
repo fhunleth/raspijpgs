@@ -48,6 +48,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdlib.h>
 #include <string.h>
 #include <memory.h>
+#include <math.h>
 #include <signal.h>
 #include <fcntl.h>
 #include <time.h>
@@ -70,6 +71,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "interface/mmal/util/mmal_default_components.h"
 #include "interface/mmal/util/mmal_connection.h"
 
+#define CAMERA_MAX_WIDTH	    2592
+#define CAMERA_MAX_HEIGHT	    1944
+
 #define MAX_CLIENTS                 8
 #define MAX_DATA_BUFFER_SIZE        131072
 #define MAX_REQUEST_BUFFER_SIZE     4096
@@ -78,6 +82,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Environment config keys
 #define RASPIJPGS_WIDTH             "RASPIJPGS_WIDTH"
+#define RASPIJPGS_HEIGHT            "RASPIJPGS_HEIGHT"
+#define RASPIJPGS_FPS		    "RASPIJPGS_FPS"
 #define RASPIJPGS_ANNOTATION        "RASPIJPGS_ANNOTATION"
 #define RASPIJPGS_ANNO_BACKGROUND   "RASPIJPGS_ANNO_BACKGROUND"
 #define RASPIJPGS_SHARPNESS         "RASPIJPGS_SHARPNESS"
@@ -285,6 +291,7 @@ static void client_set(const struct raspi_config_opt *opt, const char *value, en
 static void help(const struct raspi_config_opt *opt, const char *value, enum config_context context);
 
 static void width_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
+static void height_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
 static void annotation_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
 static void anno_background_apply(const struct raspi_config_opt *opt, enum config_context context) { UNUSED(opt); }
 static void rational_param_apply(int mmal_param, const struct raspi_config_opt *opt, enum config_context context)
@@ -510,6 +517,12 @@ static void quality_apply(const struct raspi_config_opt *opt, enum config_contex
     UNUSED(opt);
     UNUSED(context);
 }
+static void fps_apply(const struct raspi_config_opt *opt, enum config_context context)
+{
+    // TODO
+    UNUSED(opt);
+    UNUSED(context);
+}
 static void count_apply(const struct raspi_config_opt *opt, enum config_context context)
 {
     state.count = strtol(getenv(opt->env_key), NULL, 0);
@@ -519,6 +532,7 @@ static struct raspi_config_opt opts[] =
 {
     // long_option  short   env_key                  help                                                    default
     {"width",       "w",    RASPIJPGS_WIDTH,        "Set image width <size>",                               "320",      default_set, width_apply},
+    {"height",      "h",    RASPIJPGS_HEIGHT,       "Set image height <size> (0 = calculate from width",    "0",        default_set, height_apply},
     {"annotation",  "a",    RASPIJPGS_ANNOTATION,   "Annotate the video frames with this text",             "",         default_set, annotation_apply},
     {"anno_background", "ab", RASPIJPGS_ANNO_BACKGROUND, "Turn on a black background behind the annotation", "off",     default_set, anno_background_apply},
     {"sharpness",   "sh",   RASPIJPGS_SHARPNESS,    "Set image sharpness (-100 to 100)",                    "0",        default_set, sharpness_apply},
@@ -529,6 +543,7 @@ static struct raspi_config_opt opts[] =
     {"vstab",       "vs",   RASPIJPGS_VSTAB,        "Turn on video stabilisation",                          "off",      default_set, vstab_apply},
     {"ev",          "ev",   RASPIJPGS_EV,           "Set EV compensation (-10 to 10)",                      "0",        default_set, ev_apply},
     {"exposure",    "ex",   RASPIJPGS_EXPOSURE,     "Set exposure mode",                                    "auto",     default_set, exposure_apply},
+    {"fps",         0,      RASPIJPGS_FPS,          "Limit the frame rate (0 = auto)",                      "0",        default_set, fps_apply},
     {"awb",         "awb",  RASPIJPGS_AWB,          "Set Automatic White Balance (AWB) mode",               "auto",     default_set, awb_apply},
     {"imxfx",       "ifx",  RASPIJPGS_IMXFX,        "Set image effect",                                     "none",     default_set, imxfx_apply},
     {"colfx",       "cfx",  RASPIJPGS_COLFX,        "Set colour effect <U:V>",                              "",         default_set, colfx_apply},
@@ -1007,16 +1022,29 @@ void start_all()
     if (mmal_port_enable(state.camera->control, camera_control_callback) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not enable camera control port");
 
-    int video_width = 1920;
-    int video_height = 1080;
+    int fps100 = lrint(100.0 * strtod(getenv(RASPIJPGS_FPS), 0));
+    int width = strtol(getenv(RASPIJPGS_WIDTH), 0, 0);
+    if (width <= 0)
+        width = 320;
+    width = width & ~0xf; // Force to multiple of 16 for JPEG encoder
+    int height = strtol(getenv(RASPIJPGS_HEIGHT), 0, 0);
+    if (height <= 0)
+        height = CAMERA_MAX_HEIGHT * width / CAMERA_MAX_WIDTH; // Default to the camera's aspect ratio 
+    height = height & ~0xf;
+
+    // TODO: The fact that this seems to work implies that there's a scaler
+    //       in the camera block and we don't need a resizer??
+    int video_width = width;
+    int video_height = height;
+
     MMAL_PARAMETER_CAMERA_CONFIG_T cam_config = {
         {MMAL_PARAMETER_CAMERA_CONFIG, sizeof(cam_config)},
-        .max_stills_w = 2592, //image_width,
-        .max_stills_h = 1944, //image_height,
+        .max_stills_w = 0,
+        .max_stills_h = 0,
         .stills_yuv422 = 0,
-        .one_shot_stills = 1,
-        .max_preview_video_w = video_width,
-        .max_preview_video_h = video_height,
+        .one_shot_stills = 0,
+        .max_preview_video_w = CAMERA_MAX_WIDTH,
+        .max_preview_video_h = CAMERA_MAX_HEIGHT,
         .num_preview_video_frames = 3,
         .stills_capture_circular_buffer_height = 0,
         .fast_preview_resume = 0,
@@ -1032,8 +1060,8 @@ void start_all()
     format->es->video.crop.y = 0;
     format->es->video.crop.width = video_width;
     format->es->video.crop.height = video_height;
-    format->es->video.frame_rate.num = 0;
-    format->es->video.frame_rate.den = 1;
+    format->es->video.frame_rate.num = fps100;
+    format->es->video.frame_rate.den = 100;
     if (mmal_port_format_commit(state.camera->output[0]) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set preview format");
 
@@ -1047,7 +1075,6 @@ void start_all()
     if (status != MMAL_SUCCESS && status != MMAL_ENOSYS)
         errx(EXIT_FAILURE, "Could not create image encoder");
 
-    mmal_format_copy(state.jpegencoder->output[0]->format, state.jpegencoder->input[0]->format); // WHAT???
     state.jpegencoder->output[0]->format->encoding = MMAL_ENCODING_JPEG;
     state.jpegencoder->output[0]->buffer_size = state.jpegencoder->output[0]->buffer_size_recommended;
     if (state.jpegencoder->output[0]->buffer_size < state.jpegencoder->output[0]->buffer_size_min)
@@ -1074,21 +1101,18 @@ void start_all()
     //
     // create image-resizer
     //
-    int width = strtol(getenv(RASPIJPGS_WIDTH), 0, 0);
-    unsigned int height_temp = (unsigned long int)width*video_height/video_width;
-    height_temp -= height_temp%16;
     status = mmal_component_create("vc.ril.resize", &state.resizer);
     if (status != MMAL_SUCCESS && status != MMAL_ENOSYS)
         errx(EXIT_FAILURE, "Could not create image resizer");
 
     format = state.resizer->output[0]->format;
     format->es->video.width = width;
-    format->es->video.height = height_temp;
+    format->es->video.height = height;
     format->es->video.crop.x = 0;
     format->es->video.crop.y = 0;
     format->es->video.crop.width = width;
-    format->es->video.crop.height = height_temp;
-    format->es->video.frame_rate.num = 30;
+    format->es->video.crop.height = height;
+    format->es->video.frame_rate.num = fps100;
     format->es->video.frame_rate.den = 1;
     if (mmal_port_format_commit(state.resizer->output[0]) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set image resizer output");
