@@ -8,10 +8,10 @@ INSTALL_PREFIX?=/usr/local
 
 SRCS=raspijpgs.c
 INCLUDES?=-I$(VC_DIR)/include -I$(VC_DIR)/include/interface/vcos/pthreads -I$(VC_DIR)/include/interface/vmcs_host/linux
-LIBS=-L$(VC_DIR)/lib -lmmal_core -lmmal_util -lmmal_vc_client -Lvcos -lbcm_host
+LIBS=-L$(VC_DIR)/lib -lmmal_core -lmmal_util -lmmal_vc_client -Lvcos -lbcm_host -lm
 OBJS=$(SRCS:.c=.o)
 CFLAGS?=-Wall -O2
-LDFLAGS?=-lm
+LDFLAGS?=
 STRIP?=strip
 
 all: raspijpgs
