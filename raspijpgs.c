@@ -233,6 +233,16 @@ static void setstring(char **left, const char *right)
     *left = strdup(right);
 }
 
+static int constrain(int minimum, int value, int maximum)
+{
+    if (value < minimum)
+        return minimum;
+    else if (value > maximum)
+        return maximum;
+    else
+        return value;
+}
+
 static void config_set(const struct raspi_config_opt *opt, const char *value, enum config_context context)
 {
     UNUSED(opt); UNUSED(context);
@@ -513,9 +523,11 @@ static void shutter_apply(const struct raspi_config_opt *opt, enum config_contex
 }
 static void quality_apply(const struct raspi_config_opt *opt, enum config_context context)
 {
-    // TODO
-    UNUSED(opt);
     UNUSED(context);
+    int value = strtoul(getenv(opt->env_key), NULL, 0);
+    value = constrain(0, value, 100);
+    if (mmal_port_parameter_set_uint32(state.jpegencoder->output[0], MMAL_PARAMETER_JPEG_Q_FACTOR, value) != MMAL_SUCCESS)
+        errx(EXIT_FAILURE, "Could not set %s to %d", opt->long_option, value);
 }
 static void fps_apply(const struct raspi_config_opt *opt, enum config_context context)
 {
@@ -1087,7 +1099,7 @@ void start_all()
 
     int quality = strtol(getenv(RASPIJPGS_QUALITY), 0, 0);
     if (mmal_port_parameter_set_uint32(state.jpegencoder->output[0], MMAL_PARAMETER_JPEG_Q_FACTOR, quality) != MMAL_SUCCESS)
-        errx(EXIT_FAILURE, "Could not set jpeg quality");
+        errx(EXIT_FAILURE, "Could not set jpeg quality to %d", quality);
 
     if (mmal_port_parameter_set_boolean(state.jpegencoder->output[0], MMAL_PARAMETER_EXIF_DISABLE, 1) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not turn off EXIF");
