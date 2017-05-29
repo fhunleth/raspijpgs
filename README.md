@@ -135,6 +135,7 @@ vflip           | RASPIJPG_VFLIP | 	 Set vertical flip
 roi             | RASPIJPG_ROI | 	 Set sensor region of interest
 shutter         | RASPIJPG_SHUTTER | 	 Set shutter speed
 quality         | RASPIJPG_QUALITY | 	 Set the JPEG quality (0-100)
+restart_interval | RASPIJPGS_RESTART_INTERVAL | Set the JPEG restart interval
 socket          | RASPIJPG_SOCKET | 	 Specify the socket filename for communication
 output          | RASPIJPG_OUTPUT | 	 Specify an output filename or '-' for stdout
 count           | RASPIJPG_COUNT |      	 How many frames to capture before quiting (-1 = no limit)

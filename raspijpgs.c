@@ -70,9 +70,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "interface/mmal/util/mmal_util_params.h"
 #include "interface/mmal/util/mmal_default_components.h"
 #include "interface/mmal/util/mmal_connection.h"
-
-#define CAMERA_MAX_WIDTH	    2592
-#define CAMERA_MAX_HEIGHT	    1944
+#include "interface/mmal/mmal_parameters_camera.h"
 
 #define MAX_CLIENTS                 8
 #define MAX_DATA_BUFFER_SIZE        131072
@@ -105,6 +103,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define RASPIJPGS_ROI               "RASPIJPGS_ROI"
 #define RASPIJPGS_SHUTTER           "RASPIJPGS_SHUTTER"
 #define RASPIJPGS_QUALITY           "RASPIJPGS_QUALITY"
+#define RASPIJPGS_RESTART_INTERVAL  "RASPIJPGS_RESTART_INTERVAL"
 #define RASPIJPGS_SOCKET            "RASPIJPGS_SOCKET"
 #define RASPIJPGS_OUTPUT            "RASPIJPGS_OUTPUT"
 #define RASPIJPGS_COUNT             "RASPIJPGS_COUNT"
@@ -529,6 +528,12 @@ static void quality_apply(const struct raspi_config_opt *opt, enum config_contex
     if (mmal_port_parameter_set_uint32(state.jpegencoder->output[0], MMAL_PARAMETER_JPEG_Q_FACTOR, value) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set %s to %d", opt->long_option, value);
 }
+static void restart_interval_apply(const struct raspi_config_opt *opt, enum config_context context)
+{
+    // TODO
+    UNUSED(opt);
+    UNUSED(context);
+}
 static void fps_apply(const struct raspi_config_opt *opt, enum config_context context)
 {
     // TODO
@@ -567,6 +572,7 @@ static struct raspi_config_opt opts[] =
     {"roi",         "roi",  RASPIJPGS_ROI,          "Set region of interest (x,y,w,d as normalised coordinates [0.0-1.0])", "0:0:1:1", default_set, roi_apply},
     {"shutter",     "ss",   RASPIJPGS_SHUTTER,      "Set shutter speed",                                    "0",        default_set, shutter_apply},
     {"quality",     "q",    RASPIJPGS_QUALITY,      "Set the JPEG quality (0-100)",                         "15",       default_set, quality_apply},
+    {"restart_interval", "rs", RASPIJPGS_RESTART_INTERVAL, "Set the JPEG restart interval (default of 0 for none)", "0", default_set, restart_interval_apply},
     {"socket",      0,      RASPIJPGS_SOCKET,       "Specify the socket filename for communication",        "/tmp/raspijpgs_socket", default_set, 0},
     {"output",      "o",    RASPIJPGS_OUTPUT,       "Specify an output filename or '-' for stdout",         "",         default_set, 0},
     {"count",       0,      RASPIJPGS_COUNT,        "How many frames to capture before quiting (-1 = no limit)", "-1",  default_set, count_apply},
@@ -876,8 +882,10 @@ static void camera_control_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T *buf
     // This is called from another thread. Don't access any data here.
     UNUSED(port);
 
-    if(buffer->cmd != MMAL_EVENT_PARAMETER_CHANGED)
-        errx(EXIT_FAILURE, "Camera sent invalid data");
+    if (buffer->cmd == MMAL_EVENT_ERROR)
+       errx(EXIT_FAILURE, "No data received from sensor. Check all connections, including the Sunny one on the camera board");
+    else if(buffer->cmd != MMAL_EVENT_PARAMETER_CHANGED)
+        errx(EXIT_FAILURE, "Camera sent invalid data: 0x%08x", buffer->cmd);
 
     mmal_buffer_header_release(buffer);
 }
@@ -1032,8 +1040,50 @@ static void jpegencoder_buffer_callback(MMAL_PORT_T *port, MMAL_BUFFER_HEADER_T 
     }
 }
 
+static void find_sensor_dimensions(int camera_ix, int *imager_width, int *imager_height)
+{
+    MMAL_COMPONENT_T *camera_info;
+
+    // Default to OV5647 full resolution
+    *imager_width = 2592;
+    *imager_height = 1944;
+
+    // Try to get the camera name and maximum supported resolution
+    MMAL_STATUS_T status = mmal_component_create(MMAL_COMPONENT_DEFAULT_CAMERA_INFO, &camera_info);
+    if (status == MMAL_SUCCESS) {
+        MMAL_PARAMETER_CAMERA_INFO_T param;
+        param.hdr.id = MMAL_PARAMETER_CAMERA_INFO;
+        param.hdr.size = sizeof(param)-4;  // Deliberately undersize to check firmware version
+        status = mmal_port_parameter_get(camera_info->control, &param.hdr);
+
+        if (status != MMAL_SUCCESS) {
+            // Running on newer firmware
+            param.hdr.size = sizeof(param);
+            status = mmal_port_parameter_get(camera_info->control, &param.hdr);
+            if (status == MMAL_SUCCESS && param.num_cameras > camera_ix) {
+                // Take the parameters from the first camera listed.
+                *imager_width = param.cameras[camera_ix].max_width;
+                *imager_height = param.cameras[camera_ix].max_height;
+            } else
+                warnx("Cannot read camera info, keeping the defaults for OV5647");
+        } else {
+            // Older firmware
+            // Nothing to do here, keep the defaults for OV5647
+        }
+
+        mmal_component_destroy(camera_info);
+    } else {
+        warnx("Failed to create camera_info component");
+    }
+}
+
 void start_all()
 {
+    // Find out which Raspberry Camera is attached for the defaults
+    int imager_width;
+    int imager_height;
+    find_sensor_dimensions(0, &imager_width, &imager_height);
+
     //
     // create camera
     //
@@ -1046,10 +1096,14 @@ void start_all()
     int width = strtol(getenv(RASPIJPGS_WIDTH), 0, 0);
     if (width <= 0)
         width = 320;
+    else if (width > imager_width)
+        width = imager_width;
     width = width & ~0xf; // Force to multiple of 16 for JPEG encoder
     int height = strtol(getenv(RASPIJPGS_HEIGHT), 0, 0);
     if (height <= 0)
-        height = CAMERA_MAX_HEIGHT * width / CAMERA_MAX_WIDTH; // Default to the camera's aspect ratio 
+        height = imager_height * width / imager_width; // Default to the camera's aspect ratio
+    else if (height > imager_height)
+        height = imager_height;
     height = height & ~0xf;
 
     // TODO: The fact that this seems to work implies that there's a scaler
@@ -1063,8 +1117,8 @@ void start_all()
         .max_stills_h = 0,
         .stills_yuv422 = 0,
         .one_shot_stills = 0,
-        .max_preview_video_w = CAMERA_MAX_WIDTH,
-        .max_preview_video_h = CAMERA_MAX_HEIGHT,
+        .max_preview_video_w = imager_width,
+        .max_preview_video_h = imager_height,
         .num_preview_video_frames = 3,
         .stills_capture_circular_buffer_height = 0,
         .fast_preview_resume = 0,
@@ -1108,6 +1162,11 @@ void start_all()
     int quality = strtol(getenv(RASPIJPGS_QUALITY), 0, 0);
     if (mmal_port_parameter_set_uint32(state.jpegencoder->output[0], MMAL_PARAMETER_JPEG_Q_FACTOR, quality) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not set jpeg quality to %d", quality);
+
+    // Set the JPEG restart interval
+    int restart_interval = strtol(getenv(RASPIJPGS_RESTART_INTERVAL), 0, 0);
+    if (mmal_port_parameter_set_uint32(state.jpegencoder->output[0], MMAL_PARAMETER_JPEG_RESTART_INTERVAL, restart_interval) != MMAL_SUCCESS)
+        errx(EXIT_FAILURE, "Unable to set JPEG restart interval");
 
     if (mmal_port_parameter_set_boolean(state.jpegencoder->output[0], MMAL_PARAMETER_EXIF_DISABLE, 1) != MMAL_SUCCESS)
         errx(EXIT_FAILURE, "Could not turn off EXIF");
@@ -1314,7 +1373,7 @@ static void process_stdin_http_framing()
        } else {
            write_string(http_404_response);
            state.count = 0;
-       } 
+       }
     } else {
        // If not a GET, then respond with an error and quit.
        write_string(http_500_response);
