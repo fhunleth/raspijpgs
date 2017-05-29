@@ -566,7 +566,7 @@ static struct raspi_config_opt opts[] =
     {"vflip",       "vf",   RASPIJPGS_VFLIP,        "Set vertical flip",                                    "off",      default_set, flip_apply},
     {"roi",         "roi",  RASPIJPGS_ROI,          "Set region of interest (x,y,w,d as normalised coordinates [0.0-1.0])", "0:0:1:1", default_set, roi_apply},
     {"shutter",     "ss",   RASPIJPGS_SHUTTER,      "Set shutter speed",                                    "0",        default_set, shutter_apply},
-    {"quality",     "q",    RASPIJPGS_QUALITY,      "Set the JPEG quality (0-100)",                         "75",       default_set, quality_apply},
+    {"quality",     "q",    RASPIJPGS_QUALITY,      "Set the JPEG quality (0-100)",                         "15",       default_set, quality_apply},
     {"socket",      0,      RASPIJPGS_SOCKET,       "Specify the socket filename for communication",        "/tmp/raspijpgs_socket", default_set, 0},
     {"output",      "o",    RASPIJPGS_OUTPUT,       "Specify an output filename or '-' for stdout",         "",         default_set, 0},
     {"count",       0,      RASPIJPGS_COUNT,        "How many frames to capture before quiting (-1 = no limit)", "-1",  default_set, count_apply},
