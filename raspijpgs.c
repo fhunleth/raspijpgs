@@ -261,7 +261,7 @@ static void send_set(const struct raspi_config_opt *opt, const char *value, enum
             break;
     }
     if (!o->long_option)
-        errx(EXIT_FAILURE, "Unexpected key '%s' used in --set. Check help", key);
+        errx(EXIT_FAILURE, "Unexpected key '%s' used in --send. Check help", key);
     free(key);
 
     if (state.sendlist) {

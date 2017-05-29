@@ -141,7 +141,7 @@ count           | RASPIJPG_COUNT |      	 How many frames to capture before quit
 lockfile        | RASPIJPG_LOCKFILE |      	 Specify a lock filename to prevent multiple runs
 config          | | 	 Specify a config file to read for options
 framing         | | 	 Specify the output framing (cat, mime, http, header, replace)
-send            | |      	 Set this parameter on the server (e.g. --set shutter=1000)
+send            | |      	 Set this parameter on the server (e.g. --send shutter=1000)
 server          | |      	 Run as a server
 client          | |      	 Run as a client
 quit            | |      	 Tell a server to quit
