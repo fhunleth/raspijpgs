@@ -990,12 +990,20 @@ static void jpegencoder_buffer_callback_impl()
     } else {
         // Hard case: assemble JPEG
         if (state.socket_buffer_ix + buffer->length > MAX_DATA_BUFFER_SIZE) {
-            warnx("Frame too large (%d bytes). Dropping. Adjust MAX_DATA_BUFFER_SIZE.", state.socket_buffer_ix + buffer->length);
+            if (buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END) {
+                state.socket_buffer_ix = 0;
+            } else if (state.socket_buffer_ix != MAX_DATA_BUFFER_SIZE) {
+                // Warn when frame crosses threshold
+                warnx("Frame too large (%d bytes). Dropping. Adjust MAX_DATA_BUFFER_SIZE.", state.socket_buffer_ix + buffer->length);
+                state.socket_buffer_ix = MAX_DATA_BUFFER_SIZE;
+            }
         } else {
             memcpy(&state.socket_buffer[state.socket_buffer_ix], buffer->data, buffer->length);
             state.socket_buffer_ix += buffer->length;
-            if (buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END)
+            if (buffer->flags & MMAL_BUFFER_HEADER_FLAG_FRAME_END) {
                 distribute_jpeg(state.socket_buffer, state.socket_buffer_ix);
+                state.socket_buffer_ix = 0;
+            }
         }
     }
 
